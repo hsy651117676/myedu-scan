@@ -15,7 +15,7 @@ namespace ScanTool
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            string serverUrl = "https://192.168.18.100";
+            string serverUrl = "http://192.168.18.100";
             var configPath = Path.Combine(Path.GetPathRoot(Environment.SystemDirectory), "ScanTool", "config.ini");
             if (System.IO.File.Exists(configPath))
             {

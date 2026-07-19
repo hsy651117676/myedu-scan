@@ -1,14 +1,10 @@
-﻿// Services/ViewportController.cs
-using System;
+﻿using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
 namespace ScanTool.Services
 {
-    /// <summary>
-    /// 视口控制：缩放（以可视中心为基准）、平移、适应窗口、重置
-    /// </summary>
     public class ViewportController : IDisposable
     {
         private readonly PictureBox _picBox;
@@ -16,12 +12,37 @@ namespace ScanTool.Services
         private float _zoomFactor = 1.0f;
         private Point _panOffset = Point.Empty;
 
+        // 鼠标拖动平移
+        private bool _isDragging;
+        private Point _dragStartMouse;
+        private Point _dragStartPanOffset;
+        private bool _enableDrag = true;
+
         public float ZoomFactor => _zoomFactor;
+
+        public bool EnableDrag
+        {
+            get => _enableDrag;
+            set
+            {
+                _enableDrag = value;
+                if (!_enableDrag)
+                {
+                    _isDragging = false;
+                    _picBox.Capture = false;
+                }
+            }
+        }
 
         public ViewportController(PictureBox picBox)
         {
             _picBox = picBox;
             _picBox.MouseWheel += OnMouseWheel;
+            _picBox.MouseDown += OnMouseDown;
+            _picBox.MouseMove += OnMouseMove;
+            _picBox.MouseUp += OnMouseUp;
+            _picBox.MouseEnter += OnMouseEnter;
+            _picBox.MouseLeave += OnMouseLeave;
         }
 
         public void SetOriginalImage(Image img)
@@ -32,7 +53,7 @@ namespace ScanTool.Services
             _panOffset = Point.Empty;
         }
 
-        // ==================== 缩放（以 PictureBox 可视中心为基准） ====================
+        // ==================== 缩放 ====================
 
         public void ZoomIn()
         {
@@ -59,16 +80,75 @@ namespace ScanTool.Services
             _panOffset.Y = (int)(cy - ratio * (cy - _panOffset.Y));
         }
 
+        private void AdjustPanForPointZoom(float oldZoom, Point mousePoint)
+        {
+            float ratio = _zoomFactor / oldZoom;
+            _panOffset.X = (int)(mousePoint.X - ratio * (mousePoint.X - _panOffset.X));
+            _panOffset.Y = (int)(mousePoint.Y - ratio * (mousePoint.Y - _panOffset.Y));
+        }
+
         private void OnMouseWheel(object sender, MouseEventArgs e)
         {
-            if (Control.ModifierKeys == Keys.Control)
+            if (_originalImage == null) return;
+
+            float old = _zoomFactor;
+
+            if (e.Delta > 0)
+                _zoomFactor = Math.Min(_zoomFactor * 1.25f, 10f);
+            else
+                _zoomFactor = Math.Max(_zoomFactor / 1.25f, 0.1f);
+
+            AdjustPanForPointZoom(old, e.Location);
+            Render();
+        }
+
+        // ==================== 鼠标拖动平移 ====================
+
+        private void OnMouseDown(object sender, MouseEventArgs e)
+        {
+            if (!_enableDrag) return;
+            if (e.Button == MouseButtons.Left && _originalImage != null)
             {
-                if (e.Delta > 0) ZoomIn();
-                else ZoomOut();
+                _isDragging = true;
+                _dragStartMouse = e.Location;
+                _dragStartPanOffset = _panOffset;
+                _picBox.Capture = true;
             }
         }
 
-        // ==================== 平移 ====================
+        private void OnMouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_enableDrag || !_isDragging) return;
+
+            int dx = e.X - _dragStartMouse.X;
+            int dy = e.Y - _dragStartMouse.Y;
+
+            _panOffset = new Point(_dragStartPanOffset.X + dx, _dragStartPanOffset.Y + dy);
+            Render();
+        }
+
+        private void OnMouseUp(object sender, MouseEventArgs e)
+        {
+            if (_isDragging)
+            {
+                _isDragging = false;
+                _picBox.Capture = false;
+            }
+        }
+
+        private void OnMouseEnter(object sender, EventArgs e)
+        {
+            if (_enableDrag && _originalImage != null)
+                _picBox.Cursor = Cursors.Hand;
+        }
+
+        private void OnMouseLeave(object sender, EventArgs e)
+        {
+            if (!_isDragging)
+                _picBox.Cursor = Cursors.Default;
+        }
+
+        // ==================== 平移（工具栏按钮用） ====================
 
         public void PanUp() { _panOffset.Y += 30; Render(); }
         public void PanDown() { _panOffset.Y -= 30; Render(); }

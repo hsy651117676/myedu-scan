@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -119,15 +120,12 @@ namespace ScanTool.Controls
                     await RunBatchRepair(() => false, profile);
                 }
 
-                // 查找下一个材料
                 var nextNode = FindNextMaterialInCategory(_tvMaterials.SelectedNode, currentFl);
 
                 if (nextNode != null)
                 {
-                    // 直接选中节点
                     _tvMaterials.SelectedNode = nextNode;
 
-                    // 手动更新状态
                     if (nextNode.Tag is NodeTag tag && tag.Archid != null)
                     {
                         int archid = int.Parse(tag.Archid);
@@ -157,6 +155,7 @@ namespace ScanTool.Controls
             _owner.RefreshAfterBatch();
             _lblStatus.Text = $"【{profile?.Name ?? "自动判断修复"}】处理完成";
         }
+
         public async Task StartBatchFromCurrent(Func<RepairProfile> getProfile)
         {
             var profile = getProfile();
@@ -171,7 +170,6 @@ namespace ScanTool.Controls
 
             _lblStatus.Text = $"【{profile?.Name ?? "自动判断修复"}】处理中...";
 
-            // 获取当前选中的材料节点
             TreeNode startNode = _tvMaterials.SelectedNode;
             if (startNode == null || !(startNode.Tag is NodeTag tag) || tag.Archid == null)
             {
@@ -179,10 +177,8 @@ namespace ScanTool.Controls
                 return;
             }
 
-            // 获取当前 FL
             int currentFl = _owner.CurrentFl;
 
-            // 收集当前 FL 下所有材料节点
             TreeNode flNode = startNode.Parent;
             if (flNode == null)
             {
@@ -193,7 +189,6 @@ namespace ScanTool.Controls
             var allMaterialNodes = new List<TreeNode>();
             CollectAllMaterialNodes(flNode, currentFl, allMaterialNodes);
 
-            // 找到当前材料在列表中的位置
             int startIndex = allMaterialNodes.IndexOf(startNode);
             if (startIndex < 0)
             {
@@ -201,13 +196,11 @@ namespace ScanTool.Controls
                 return;
             }
 
-            // 从当前材料开始，逐个处理
             for (int i = startIndex; i < allMaterialNodes.Count; i++)
             {
                 var node = allMaterialNodes[i];
                 if (!(node.Tag is NodeTag nodeTag) || nodeTag.Archid == null) continue;
 
-                // 选中节点
                 _tvMaterials.SelectedNode = node;
                 int archid = int.Parse(nodeTag.Archid);
                 int fl = int.Parse(nodeTag.Fl);
@@ -224,7 +217,6 @@ namespace ScanTool.Controls
 
                 await Task.Delay(200);
 
-                // 检查是否有本地文件
                 string localDir = Path.Combine(_scanDir, _owner.CurrentRsid.PadLeft(8, '0'), _owner.CurrentFl.ToString(), _owner.CurrentArchid.ToString());
                 bool hasFiles = false;
                 for (int j = 0; j < _listManager.Count; j++)
@@ -247,6 +239,78 @@ namespace ScanTool.Controls
             _owner.RefreshAfterBatch();
             _lblStatus.Text = $"【{profile?.Name ?? "自动判断修复"}】处理完成";
         }
+
+        public async Task StartBatchVolume(Func<RepairProfile> getProfile)
+        {
+            var profile = getProfile();
+            if (profile != null)
+            {
+                _lblStatus.Text = "整卷自动修复仅在「自动判断修复」模式下可用";
+                return;
+            }
+
+            if (MessageBox.Show($"将使用【自动判断修复】自动修复整卷所有材料。\n\n确定开始？",
+                "确认批量处理", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+
+            _lblStatus.Text = "整卷【自动判断修复】处理中...";
+
+            var flNodes = new List<TreeNode>();
+            foreach (TreeNode node in _tvMaterials.Nodes)
+                CollectFlNodes(node, flNodes);
+
+            foreach (var flNode in flNodes)
+            {
+                if (_cancelled) break;
+                if (!(flNode.Tag is NodeTag flTag)) continue;
+                int fl = int.Parse(flTag.Fl);
+
+                var materialNodes = new List<TreeNode>();
+                CollectAllMaterialNodesInFl(flNode, materialNodes);
+
+                foreach (var materialNode in materialNodes)
+                {
+                    if (_cancelled) break;
+                    if (!(materialNode.Tag is NodeTag tag) || tag.Archid == null) continue;
+
+                    _tvMaterials.SelectedNode = materialNode;
+                    int archid = int.Parse(tag.Archid);
+                    _owner.SetCurrentArchid(archid);
+                    _owner.SetCurrentFl(fl);
+
+                    var match = System.Text.RegularExpressions.Regex.Match(materialNode.Text, @"\((\d+)");
+                    int maxPages = match.Success ? int.Parse(match.Groups[1].Value) : 0;
+                    _owner.SetMaxPages(maxPages);
+                    _owner.RefreshListAndStatus();
+
+                    if (_listManager.Count > 0) _listManager.SelectPage(0);
+                    else { _editor.SetImage(null); _viewport.SetOriginalImage(null); _processor.Clear(); _setEditingFile(null); }
+
+                    await Task.Delay(200);
+
+                    string localDir = Path.Combine(_scanDir, _owner.CurrentRsid.PadLeft(8, '0'), fl.ToString(), archid.ToString());
+                    bool hasFiles = false;
+                    for (int i = 0; i < _listManager.Count; i++)
+                    {
+                        var f = _listManager.GetFile(i);
+                        if (f != null && f.LocalPath != null && File.Exists(f.LocalPath))
+                        { hasFiles = true; break; }
+                    }
+
+                    if (Directory.Exists(localDir) && hasFiles)
+                    {
+                        await RunBatchRepair(() => false, profile);
+                    }
+                    else
+                    {
+                        _lblStatus.Text = $"跳过 {materialNode.Text}（无本地文件）";
+                    }
+                }
+            }
+
+            _owner.RefreshAfterBatch();
+            _lblStatus.Text = _cancelled ? "已取消" : "整卷【自动判断修复】处理完成";
+        }
+
         private async Task RunBatchRepair(Func<bool> hasNextMaterial, RepairProfile profile)
         {
             _cancelled = false;
@@ -274,6 +338,7 @@ namespace ScanTool.Controls
 
                         if (profile == null)
                         {
+                            Debug.WriteLine($"[BatchRepair] 材料: {_tvMaterials.SelectedNode?.Text}, 文件: {info.Filename}");
                             var autoProfile = AutoRepairService.Analyze(originalBmp);
                             if (autoProfile != null && autoProfile.Name != "不自动修复")
                             {
@@ -410,6 +475,30 @@ namespace ScanTool.Controls
             }
         }
 
+        private void CollectFlNodes(TreeNode parent, List<TreeNode> result)
+        {
+            if (parent.Tag is NodeTag t && t.Fl != null && t.Fl != "0" && t.Archid == null)
+                result.Add(parent);
+
+            foreach (TreeNode child in parent.Nodes)
+                CollectFlNodes(child, result);
+        }
+
+        private void CollectAllMaterialNodesInFl(TreeNode flNode, List<TreeNode> result)
+        {
+            foreach (TreeNode child in flNode.Nodes)
+            {
+                if (child.Tag is NodeTag tag && tag.Archid != null)
+                {
+                    result.Add(child);
+                }
+                else
+                {
+                    CollectAllMaterialNodesInFl(child, result);
+                }
+            }
+        }
+
         // ==================== 替换扫描 ====================
 
         public void ReplaceScan(Dictionary<string, List<ScanRecord>> allScans,
@@ -522,7 +611,6 @@ namespace ScanTool.Controls
                     }
                     if (newIdx >= 0) listManager.SelectPage(newIdx);
 
-                    // ✅ 修复：去掉多余的 new Bitmap()
                     using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read))
                     using (var loaded = new Bitmap(fs))
                     {

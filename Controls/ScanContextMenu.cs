@@ -24,6 +24,7 @@ namespace ScanTool.Controls
         {
             // ========== 分类节点菜单 ==========
             MenuCategory.Items.Add("🤖 Ctrl+A 当前类批量自动修复", null, async (s, e) => await _owner.StartBatchCategory());
+            MenuCategory.Items.Add("🤖 Ctrl+Shift+A 整卷自动修复", null, async (s, e) => await _owner.StartBatchVolume());
             MenuCategory.Items.Add(new ToolStripSeparator());
             MenuCategory.Items.Add("📤 F5  上传整类（仅传新文件和已修改）", null, async (s, e) => await _owner.UploadCategory());
             MenuCategory.Items.Add("📤 F6  上传整类（强制全部重传）", null, async (s, e) => { if (_confirmForce()) await _owner.ForceUploadCategory(); });
@@ -36,6 +37,7 @@ namespace ScanTool.Controls
             MenuCategory.Items.Add("📥 F12 下载整卷（强制全部重下）", null, async (s, e) => { if (_confirmForce()) await _owner.ForceDownloadWholeVolume(); });
 
             // ========== 材料节点菜单 ==========
+            MenuItem.Items.Add("🤖 Ctrl+Shift+A 整卷自动修复", null, async (s, e) => await _owner.StartBatchVolume());
             MenuItem.Items.Add("🤖 A 当前材料自动修复", null, async (s, e) => await _owner.StartBatchCurrentItem());
             MenuItem.Items.Add("🤖 Ctrl+A 当前类批量自动修复", null, async (s, e) => await _owner.StartBatchCategory());
             MenuItem.Items.Add("🤖 Ctrl+R 从当前材料开始自动修复", null, async (s, e) => await _owner.StartBatchFromCurrent());

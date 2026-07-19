@@ -54,6 +54,7 @@ namespace ScanTool.Controls
         private bool _isProcessing;
         private string _currentEditingFile;
         private List<string> _expandedNodePaths = new List<string>();
+        public async Task StartBatchVolume() => await _batchHandler.StartBatchVolume(GetCurrentRepairProfile);
         public void SetCurrentArchid(int archid) => _currentArchid = archid;
         public void SetCurrentFl(int fl) => _currentFl = fl;
         public void SetMaxPages(int maxPages) => _maxPages = maxPages;
@@ -577,8 +578,16 @@ namespace ScanTool.Controls
         {
             if (!_eraseController.IsActive) return;
             var snapshot = _eraseController.Stop();
+            _viewport.EnableDrag = true;
             if (_eraseController.HasDrawn && snapshot != null && picPreview.Image != null)
-            { var result = new Bitmap(picPreview.Image); _processor.ReplaceImage(result); _imageCache.MarkDirty(_currentEditingFile); _viewport.SetOriginalImage(result); _viewport.FitToScreen(); result.Dispose(); }
+            {
+                var result = new Bitmap(picPreview.Image);
+                _processor.ReplaceImage(result);
+                _imageCache.MarkDirty(_currentEditingFile);
+                _viewport.SetOriginalImage(result);
+                _viewport.FitToScreen();
+                result.Dispose();
+            }
             snapshot?.Dispose();
         }
 
@@ -594,6 +603,7 @@ namespace ScanTool.Controls
             switch (action)
             {
                 // 批量处理
+                case "batch_volume": _ = _batchHandler.StartBatchVolume(GetCurrentRepairProfile); break;
                 case "batch_current_item": _ = _batchHandler.StartBatchCurrentItem(GetCurrentRepairProfile); break;
                 case "batch_from_current": _ = _batchHandler.StartBatchFromCurrent(GetCurrentRepairProfile); break;
                 case "batch_category": _ = _batchHandler.StartBatchCategory(_currentFl, GetCurrentRepairProfile); break;
@@ -647,12 +657,24 @@ namespace ScanTool.Controls
                 case "contrast_up": Process(() => _processor.Contrast(1.2)); break;
                 case "contrast_down": Process(() => _processor.Contrast(0.8)); break;
                 case "auto_deskew": Process(_processor.AutoDeskew); break;
-                case "manual_deskew": _editor.StartDeskew(angle => Process(() => _processor.ManualDeskew(angle))); break;
+                case "manual_deskew":
+                    _viewport.EnableDrag = false;
+                    _editor.StartDeskew(angle => Process(() => _processor.ManualDeskew(angle)));
+                    break;
                 case "denoise": Process(_processor.Denoise); break;
                 case "grayscale": Process(_processor.Grayscale); break;
-                case "crop": _editor.StartCrop(); _editor.CropCompleted -= OnCropCompleted; _editor.CropCompleted += OnCropCompleted; break;
+                case "crop":
+                    _viewport.EnableDrag = false;
+                    _editor.StartCrop();
+                    _editor.CropCompleted -= OnCropCompleted;
+                    _editor.CropCompleted += OnCropCompleted;
+                    break;
                 case "remove_border": Process(_processor.RemoveBlackBorder); break;
-                case "erase": _eraseController.Start(); lblStatus.Text = "擦除模式: 拖动擦除 | +/-调整大小 | 点击其他按钮退出"; break;
+                case "erase":
+                    _viewport.EnableDrag = false;
+                    _eraseController.Start();
+                    lblStatus.Text = "擦除模式: 拖动擦除 | +/-调整大小 | 点击其他按钮退出";
+                    break;
                 case "eraser_size_up": _eraseController.SizeUp(); break;
                 case "eraser_size_down": _eraseController.SizeDown(); break;
                 case "undo": if (_processor.HasUndo) { _processor.Undo(); RefreshPreview(); } else lblStatus.Text = "没有可撤销的操作"; break;
@@ -660,7 +682,7 @@ namespace ScanTool.Controls
                 case "restore":
                     if (!string.IsNullOrEmpty(_currentEditingFile) && File.Exists(_currentEditingFile))
                     {
-                        // ✅ 修复：去掉多余的 new Bitmap()
+                        
                         using (var fs = new FileStream(_currentEditingFile, FileMode.Open, FileAccess.Read))
                         {
                             var db = new Bitmap(fs);
@@ -709,8 +731,13 @@ namespace ScanTool.Controls
                     if (ni < _listManager.Count) { _listManager.SelectPage(ni); OnPageSelected(ni); }
                     else { var nn = FindNextMaterialNode(tvMaterials.SelectedNode); if (nn != null) { tvMaterials.SelectedNode = nn; tvMaterials_AfterSelect(null, new TreeViewEventArgs(nn)); } else MessageBox.Show("已是最后一份材料的最后一页！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information); }
                     break;
-                case "escape": _eraseController?.Stop(); _editor?.StopCrop(); _editor?.StopDeskew(); ExitEraseIfActive(); break;
-
+                case "escape":
+                    _eraseController?.Stop();
+                    _editor?.StopCrop();
+                    _editor?.StopDeskew();
+                    ExitEraseIfActive();
+                    _viewport.EnableDrag = true;
+                    break;
                 case "jump_1": JumpToPage(1); break;
                 case "jump_2": JumpToPage(2); break;
                 case "jump_3": JumpToPage(3); break;
@@ -767,8 +794,12 @@ namespace ScanTool.Controls
 
         // ==================== 裁剪 ====================
 
-        private void OnCropCompleted(Rectangle rect) { _editor.CropCompleted -= OnCropCompleted; Process(() => ApplyCrop(rect)); }
-
+        private void OnCropCompleted(Rectangle rect)
+        {
+            _editor.CropCompleted -= OnCropCompleted;
+            _viewport.EnableDrag = true;
+            Process(() => ApplyCrop(rect));
+        }
         private void ApplyCrop(Rectangle rect)
         {
             if (rect.Width < 10 || rect.Height < 10) { _editor.StopCrop(); return; }

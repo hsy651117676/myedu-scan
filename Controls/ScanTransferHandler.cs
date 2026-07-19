@@ -60,12 +60,19 @@ namespace ScanTool.Controls
             return _uploadManager.UploadItem(rsid, fl, archid, files);
         }
 
-        public Task ForceUploadItem(string rsid, int fl, int archid)
+        public async Task ForceUploadItem(string rsid, int fl, int archid)
         {
-            _uploadManager.SetForceMode(true);
-            _uploadManager.SetMaxPages(_owner.MaxPages);
-            var files = GetLocalFiles(rsid, fl, archid);
-            return _uploadManager.UploadItem(rsid, fl, archid, files).ContinueWith(_ => _uploadManager.SetForceMode(false));
+            try
+            {
+                _uploadManager.SetForceMode(true);
+                _uploadManager.SetMaxPages(_owner.MaxPages);
+                var files = GetLocalFiles(rsid, fl, archid);
+                await _uploadManager.UploadItem(rsid, fl, archid, files);
+            }
+            finally
+            {
+                _uploadManager.SetForceMode(false);
+            }
         }
 
         public Task DownloadItem(string rsid, int fl, int archid)
@@ -84,14 +91,21 @@ namespace ScanTool.Controls
         public Task UploadCategory(string rsid, int fl)
         {
             var tasks = CollectAllLocalFiles(rsid, fl);
-            return _uploadManager.UploadMultiple(rsid, fl, tasks);
+            return _uploadManager.UploadMultiple(rsid, tasks);
         }
 
-        public Task ForceUploadCategory(string rsid, int fl)
+        public async Task ForceUploadCategory(string rsid, int fl)
         {
-            _uploadManager.SetForceMode(true);
-            var tasks = CollectAllLocalFiles(rsid, fl);
-            return _uploadManager.UploadMultiple(rsid, fl, tasks).ContinueWith(_ => _uploadManager.SetForceMode(false));
+            try
+            {
+                _uploadManager.SetForceMode(true);
+                var tasks = CollectAllLocalFiles(rsid, fl);
+                await _uploadManager.UploadMultiple(rsid, tasks);
+            }
+            finally
+            {
+                _uploadManager.SetForceMode(false);
+            }
         }
 
         public Task DownloadCategory(string rsid, int fl)
@@ -110,14 +124,21 @@ namespace ScanTool.Controls
         public Task UploadWholeVolume(string rsid)
         {
             var tasks = CollectAllLocalFiles(rsid);
-            return _uploadManager.UploadMultiple(rsid, 0, tasks);
+            return _uploadManager.UploadMultiple(rsid, tasks);
         }
 
-        public Task ForceUploadWholeVolume(string rsid)
+        public async Task ForceUploadWholeVolume(string rsid)
         {
-            _uploadManager.SetForceMode(true);
-            var tasks = CollectAllLocalFiles(rsid);
-            return _uploadManager.UploadMultiple(rsid, 0, tasks).ContinueWith(_ => _uploadManager.SetForceMode(false));
+            try
+            {
+                _uploadManager.SetForceMode(true);
+                var tasks = CollectAllLocalFiles(rsid);
+                await _uploadManager.UploadMultiple(rsid, tasks);
+            }
+            finally
+            {
+                _uploadManager.SetForceMode(false);
+            }
         }
 
         public Task DownloadWholeVolume(string rsid)
@@ -152,22 +173,23 @@ namespace ScanTool.Controls
             return files;
         }
 
-        private List<(int archid, List<FileItem> files)> CollectAllLocalFiles(string rsid, int? targetFl = null)
+        private List<(int fl, int archid, List<FileItem> files)> CollectAllLocalFiles(string rsid, int? targetFl = null)
         {
-            var tasks = new List<(int archid, List<FileItem> files)>();
+            var tasks = new List<(int fl, int archid, List<FileItem> files)>();
             foreach (TreeNode node in _tvMaterials.Nodes)
                 CollectLocalMaterials(node, rsid, tasks, targetFl);
             return tasks;
         }
 
         private void CollectLocalMaterials(TreeNode parent, string rsid,
-            List<(int archid, List<FileItem> files)> result, int? targetFl = null)
+            List<(int fl, int archid, List<FileItem> files)> result, int? targetFl = null)
         {
             foreach (TreeNode node in parent.Nodes)
             {
                 if (node.Tag is NodeTag tag && tag.Archid != null && tag.Fl != "0")
                 {
-                    if (targetFl.HasValue && int.Parse(tag.Fl) != targetFl.Value) continue;
+                    int fl = int.Parse(tag.Fl);
+                    if (targetFl.HasValue && fl != targetFl.Value) continue;
                     string dir = Path.Combine(_scanDir, rsid.PadLeft(8, '0'), tag.Fl, tag.Archid);
                     var files = new List<FileItem>();
                     if (Directory.Exists(dir))
@@ -176,7 +198,7 @@ namespace ScanTool.Controls
                             var fi = new FileInfo(f);
                             files.Add(new FileItem { Filename = fi.Name, LocalPath = f, IsLocal = true, Length = fi.Length });
                         }
-                    if (files.Count > 0) result.Add((int.Parse(tag.Archid), files));
+                    if (files.Count > 0) result.Add((fl, int.Parse(tag.Archid), files));
                 }
                 if (node.Nodes.Count > 0) CollectLocalMaterials(node, rsid, result, targetFl);
             }
