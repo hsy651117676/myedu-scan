@@ -25,8 +25,6 @@ namespace ScanTool.Services
                 double vBg = GetBrightnessMedian(mat);
 
                 double rText = GetChannelMedian(mat, 0, 0.0, 0.05);
-                double gText = GetChannelMedian(mat, 1, 0.0, 0.05);
-                double bText = GetChannelMedian(mat, 2, 0.0, 0.05);
 
                 bool hasStamp = DetectStamp(mat);
                 double skewAngle = DetectSkewAngle(mat);
@@ -35,7 +33,7 @@ namespace ScanTool.Services
 
                 Debug.WriteLine($"[AutoRepair] === 诊断开始 ===");
                 Debug.WriteLine($"[AutoRepair] 背景 R:{rBg:F0} G:{gBg:F0} B:{bBg:F0} V:{vBg:F0}");
-                Debug.WriteLine($"[AutoRepair] 文字 R:{rText:F0} G:{gText:F0} B:{bText:F0}");
+                Debug.WriteLine($"[AutoRepair] 文字 R:{rText:F0}");
                 Debug.WriteLine($"[AutoRepair] 公章: {(hasStamp ? "有" : "无")}");
 
                 if (Math.Abs(skewAngle) > 1.5)
@@ -57,53 +55,67 @@ namespace ScanTool.Services
                 }
 
                 // ========== 决策 ==========
-                double fBase = 1.03;
-                bool needBgRemove = false;
+                profile.NeedBackgroundRemove = true;
+                double fBase;
+                double maskThreshold;
 
-                if (vBg < 180)
+                if (hasStamp)
+                {
+                    profile.Diagnosis = "有公章";
+                    fBase = 1.03;
+                    maskThreshold = 210;
+                }
+                else if (vBg < 180)
                 {
                     profile.Diagnosis = "发黑";
-                    needBgRemove = true;
                     fBase = 1.15;
+                    maskThreshold = 100;
                 }
                 else if (rBg < 190)
                 {
                     profile.Diagnosis = "暗黄";
-                    needBgRemove = true;
                     fBase = 1.12;
+                    maskThreshold = 140;
+                }
+                else if (bBg < 190)
+                {
+                    profile.Diagnosis = "暖黄";
+                    fBase = 1.10;
+                    maskThreshold = 130;
+                }
+                else if (rBg < 210)
+                {
+                    profile.Diagnosis = "发黄";
+                    fBase = 1.08;
+                    maskThreshold = 170;
                 }
                 else if (rBg < 225)
                 {
-                    profile.Diagnosis = "发黄";
-                    needBgRemove = true;
-                    fBase = 1.08;
-                }
-                else if (vBg < 210)
-                {
-                    profile.Diagnosis = "偏暗";
+                    profile.Diagnosis = "中黄";
                     fBase = 1.06;
+                    maskThreshold = 195;
                 }
                 else if (rBg < 240)
                 {
                     profile.Diagnosis = "微黄";
                     fBase = 1.05;
+                    maskThreshold = 210;
                 }
                 else
                 {
                     profile.Diagnosis = "正常";
                     fBase = 1.03;
+                    maskThreshold = 210;
                 }
 
-                // 文字偏淡，加大 F
-                if (rText > 100)
-                    fBase += 0.03;
+                if (rText > 120) fBase += 0.03;
+                else if (rText > 100) fBase += 0.02;
 
-                profile.NeedBackgroundRemove = needBgRemove;
                 profile.Contrast = true;
                 profile.ContrastValue = fBase;
+                profile.MaskThreshold = maskThreshold;
 
-                Debug.WriteLine($"[AutoRepair] 判定: {(hasStamp ? "有公章 | " : "")}{profile.Diagnosis} → F={fBase:F2}" +
-                    (needBgRemove ? " +背景减除(文字保护)" : ""));
+                Debug.WriteLine($"[AutoRepair] 判定: {profile.Diagnosis} → 遮罩阈值={maskThreshold} F={fBase:F2} +背景变白");
             }
 
             return profile;
@@ -118,21 +130,19 @@ namespace ScanTool.Services
 
             Mat result = null;
             Mat textMask = null;
+            Mat bgMask = null;
             try
             {
                 result = bmp.ToMat();
-
-                // 生成文字遮罩（在所有处理之前）
-                textMask = CreateTextMask(result);
+                textMask = CreateTextMask(result, profile.MaskThreshold);
 
                 if (profile.AutoDeskew)
                 {
                     var tmp = Deskew(result);
                     result.Dispose();
                     result = tmp;
-                    // 倾斜后重新生成遮罩
                     textMask.Dispose();
-                    textMask = CreateTextMask(result);
+                    textMask = CreateTextMask(result, profile.MaskThreshold);
                 }
 
                 if (profile.FillBindingHoles)
@@ -144,21 +154,21 @@ namespace ScanTool.Services
                     result.Dispose();
                     result = tmp;
                     textMask.Dispose();
-                    textMask = CreateTextMask(result);
+                    textMask = CreateTextMask(result, profile.MaskThreshold);
                 }
 
                 if (profile.NeedBackgroundRemove)
                 {
-                    Debug.WriteLine($"[AutoRepair] 执行背景减除(文字保护)");
-                    var tmp = RemoveBackgroundProtected(result, textMask);
-                    result.Dispose();
-                    result = tmp;
+                    Debug.WriteLine($"[AutoRepair] 执行背景变白");
+                    bgMask = new Mat();
+                    Cv2.BitwiseNot(textMask, bgMask);
+                    result.SetTo(new Scalar(255, 255, 255), bgMask);
                 }
 
                 if (profile.Contrast)
                 {
                     Debug.WriteLine($"[AutoRepair] 执行 F: {profile.ContrastValue:F2}");
-                    result.ConvertTo(result, -1, profile.ContrastValue, 128 * (1 - profile.ContrastValue));
+                    result.ConvertTo(result, -1, profile.ContrastValue, 0);
                 }
 
                 return result.ToBitmap();
@@ -178,39 +188,57 @@ namespace ScanTool.Services
             {
                 result?.Dispose();
                 textMask?.Dispose();
+                bgMask?.Dispose();
             }
         }
 
         // ==================== 文字遮罩 ====================
 
-        private static Mat CreateTextMask(Mat src)
+        private static Mat CreateTextMask(Mat src, double threshold)
         {
-            using var gray = new Mat();
-            Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
+            Mat[] channels = null;
+            Mat minCh = null;
+            Mat mask = null;
+            Mat hsv = null;
+            Mat sm1 = null;
+            Mat sm2 = null;
+            Mat kernel = null;
 
-            // 灰度 < 120 的是文字（保护蓝色笔）
-            var mask = new Mat();
-            Cv2.Threshold(gray, mask, 120, 255, ThresholdTypes.BinaryInv);
+            try
+            {
+                channels = Cv2.Split(src);
+                minCh = new Mat();
+                Cv2.Min(channels[0], channels[1], minCh);
+                Cv2.Min(minCh, channels[2], minCh);
 
-            using var kernel = Cv2.GetStructuringElement(MorphShapes.Ellipse, new OpenCvSharp.Size(3, 3));
-            Cv2.Dilate(mask, mask, kernel, iterations: 1);
+                mask = new Mat();
+                Cv2.Threshold(minCh, mask, threshold, 255, ThresholdTypes.BinaryInv);
 
-            return mask;
-        }
+                // 公章保护
+                hsv = new Mat();
+                Cv2.CvtColor(src, hsv, ColorConversionCodes.BGR2HSV);
+                sm1 = new Mat();
+                sm2 = new Mat();
+                Cv2.InRange(hsv, new Scalar(0, 50, 50), new Scalar(10, 255, 255), sm1);
+                Cv2.InRange(hsv, new Scalar(156, 50, 50), new Scalar(180, 255, 255), sm2);
+                Cv2.Add(mask, sm1, mask);
+                Cv2.Add(mask, sm2, mask);
 
-        // ==================== 背景减除（文字保护） ====================
+                kernel = Cv2.GetStructuringElement(MorphShapes.Ellipse, new OpenCvSharp.Size(5, 5));
+                Cv2.Dilate(mask, mask, kernel, iterations: 0);
 
-        private static Mat RemoveBackgroundProtected(Mat src, Mat textMask)
-        {
-            // 对全图做背景减除
-            var cleaned = RemoveBackground(src);
-
-            // 把文字区域盖回原图
-            using var textMaskInv = new Mat();
-            Cv2.BitwiseNot(textMask, textMaskInv);
-            src.CopyTo(cleaned, textMask);  // 文字区域用原图
-
-            return cleaned;
+                return mask;
+            }
+            finally
+            {
+                if (channels != null)
+                    foreach (var c in channels) c.Dispose();
+                minCh?.Dispose();
+                hsv?.Dispose();
+                sm1?.Dispose();
+                sm2?.Dispose();
+                kernel?.Dispose();
+            }
         }
 
         // ==================== 亮度中位数 ====================
@@ -244,64 +272,33 @@ namespace ScanTool.Services
 
         private static double GetChannelMedian(Mat src, int channelIndex, double lowPercent, double highPercent)
         {
-            var channels = Cv2.Split(src);
-            using var ch = channels[channelIndex];
-
-            using var hist = new Mat();
-            Cv2.CalcHist(new[] { ch }, new[] { 0 }, null, hist, 1, new[] { 256 }, new[] { new Rangef(0, 256) });
-
-            float total = ch.Rows * ch.Cols;
-            float targetSum = (float)(total * lowPercent + total * (highPercent - lowPercent) / 2.0);
-
-            float sum = 0;
-            int median = 128;
-            for (int i = 0; i < 256; i++)
+            Mat[] channels = null;
+            try
             {
-                sum += hist.At<float>(i);
-                if (sum >= targetSum) { median = i; break; }
+                channels = Cv2.Split(src);
+                using var ch = channels[channelIndex];
+
+                using var hist = new Mat();
+                Cv2.CalcHist(new[] { ch }, new[] { 0 }, null, hist, 1, new[] { 256 }, new[] { new Rangef(0, 256) });
+
+                float total = ch.Rows * ch.Cols;
+                float targetSum = (float)(total * lowPercent + total * (highPercent - lowPercent) / 2.0);
+
+                float sum = 0;
+                int median = 128;
+                for (int i = 0; i < 256; i++)
+                {
+                    sum += hist.At<float>(i);
+                    if (sum >= targetSum) { median = i; break; }
+                }
+
+                return median;
             }
-
-            foreach (var c in channels) c.Dispose();
-            return median;
-        }
-
-        // ==================== 背景减除 ====================
-
-        private static Mat RemoveBackground(Mat src)
-        {
-            var channels = Cv2.Split(src);
-            var resultChannels = new Mat[3];
-
-            for (int i = 0; i < 3; i++)
+            finally
             {
-                resultChannels[i] = new Mat();
-
-                int kernelSize = Math.Min(src.Cols, src.Rows) / 15;
-                if (kernelSize % 2 == 0) kernelSize++;
-                if (kernelSize < 31) kernelSize = 31;
-                if (kernelSize > 101) kernelSize = 101;
-
-                using var bg = new Mat();
-                Cv2.Blur(channels[i], bg, new OpenCvSharp.Size(kernelSize, kernelSize));
-
-                using var srcFloat = new Mat();
-                channels[i].ConvertTo(srcFloat, MatType.CV_32F);
-                using var bgFloat = new Mat();
-                bg.ConvertTo(bgFloat, MatType.CV_32F);
-
-                using var diff = new Mat();
-                Cv2.Subtract(srcFloat, bgFloat, diff);
-                Cv2.Add(diff, new Scalar(245), diff);
-                diff.ConvertTo(resultChannels[i], MatType.CV_8U);
+                if (channels != null)
+                    foreach (var c in channels) c.Dispose();
             }
-
-            var result = new Mat();
-            Cv2.Merge(resultChannels, result);
-
-            foreach (var c in channels) c.Dispose();
-            foreach (var c in resultChannels) c.Dispose();
-
-            return result;
         }
 
         // ==================== 公章检测 ====================

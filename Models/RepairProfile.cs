@@ -18,6 +18,7 @@
         public double ContrastAlpha { get; set; } = 1.0;
         public bool NeedClahe { get; set; }
         public bool NeedBackgroundRemove { get; set; }
+        public double MaskThreshold { get; set; } = 210;
 
         // 旧字段（手动预设 + 兼容）
         public bool AutoDeskew { get; set; }
