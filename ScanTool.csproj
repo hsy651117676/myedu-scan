@@ -224,6 +224,7 @@
     <Compile Include="Services\ScanService.cs" />
     <Compile Include="Services\TwainService.cs" />
     <Compile Include="Services\UploadManager.cs" />
+    <Compile Include="Services\UserSettings.cs" />
     <Compile Include="Services\ViewportController.cs" />
     <Compile Include="Services\VirtualScanner.cs" />
     <EmbeddedResource Include="Controls\ScanControl.resx">

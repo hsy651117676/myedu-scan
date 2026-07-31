@@ -1,27 +1,39 @@
 ﻿// Services/EraseController.cs
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
 namespace ScanTool.Services
 {
+    public enum EraserShape { Circle, Rectangle }
+
     public class EraseController
     {
         private readonly PictureBox _picBox;
+        private readonly Action<string> _onStatusChanged;
         private bool _isActive;
-        private int _eraserSize = 20;
         private Bitmap _snapshot;
         private Point _lastPoint;
         private bool _drawing;
         private bool _hasDrawn;
 
         public bool IsActive => _isActive;
-        public int EraserSize => _eraserSize;
+        public int EraserSize => UserSettings.Get<int>("EraserSize");
+        public EraserShape Shape => UserSettings.Get<string>("EraserShape") == "Rectangle" ? EraserShape.Rectangle : EraserShape.Circle;
         public bool HasDrawn => _hasDrawn;
 
-        public EraseController(PictureBox picBox)
+        public EraseController(PictureBox picBox, Action<string> onStatusChanged = null)
         {
             _picBox = picBox;
+            _onStatusChanged = onStatusChanged;
+        }
+
+        private void NotifyStatus()
+        {
+            if (!_isActive) return;
+            string sn = Shape == EraserShape.Circle ? "圆形" : "矩形";
+            _onStatusChanged?.Invoke($"擦除模式: {sn} | 大小: {EraserSize}px | E切换形状 | +/-调整大小");
         }
 
         public void Start()
@@ -29,7 +41,6 @@ namespace ScanTool.Services
             _isActive = true;
             _drawing = false;
             _hasDrawn = false;
-            _eraserSize = 20;
             _snapshot?.Dispose();
             _snapshot = _picBox.Image != null ? new Bitmap(_picBox.Image) : null;
             UpdateCursor();
@@ -37,19 +48,42 @@ namespace ScanTool.Services
             _picBox.MouseDown += OnMouseDown;
             _picBox.MouseMove += OnMouseMove;
             _picBox.MouseUp += OnMouseUp;
+            _picBox.MouseEnter += OnMouseEnter;
+            NotifyStatus();
         }
 
-        public void SizeUp() { _eraserSize = Math.Min(_eraserSize + 5, 100); UpdateCursor(); }
-        public void SizeDown() { _eraserSize = Math.Max(_eraserSize - 5, 5); UpdateCursor(); }
+        public void SizeUp()
+        {
+            UserSettings.Set("EraserSize", Math.Min(EraserSize + 10, 200));
+            UpdateCursor();
+            NotifyStatus();
+        }
+
+        public void SizeDown()
+        {
+            UserSettings.Set("EraserSize", Math.Max(EraserSize - 10, 10));
+            UpdateCursor();
+            NotifyStatus();
+        }
+
+        public void ToggleShape()
+        {
+            UserSettings.Set("EraserShape", Shape == EraserShape.Circle ? "Rectangle" : "Circle");
+            UpdateCursor();
+            NotifyStatus();
+        }
 
         private void UpdateCursor()
         {
-            int size = _eraserSize + 2;
+            int size = EraserSize + 4;
             var bmp = new Bitmap(size, size);
             using (var g = Graphics.FromImage(bmp))
             {
                 g.Clear(Color.Transparent);
-                g.DrawEllipse(Pens.Black, 1, 1, _eraserSize, _eraserSize);
+                if (Shape == EraserShape.Circle)
+                    g.DrawEllipse(Pens.Red, 2, 2, EraserSize, EraserSize);
+                else
+                    g.DrawRectangle(Pens.Red, 2, 2, EraserSize, EraserSize);
             }
             _picBox.Cursor = new Cursor(bmp.GetHicon());
         }
@@ -64,25 +98,39 @@ namespace ScanTool.Services
         private void OnMouseMove(object sender, MouseEventArgs e)
         {
             if (!_drawing || e.Button != MouseButtons.Left) return;
-            int dx = e.X - _lastPoint.X, dy = e.Y - _lastPoint.Y;
+            int dx = e.X - _lastPoint.X;
+            int dy = e.Y - _lastPoint.Y;
             int dist = (int)Math.Sqrt(dx * dx + dy * dy);
-            int steps = Math.Max(1, dist / (_eraserSize / 3));
+            int steps = Math.Max(1, dist / (EraserSize / 4));
             for (int i = 0; i <= steps; i++)
                 EraseAt(new Point(_lastPoint.X + dx * i / steps, _lastPoint.Y + dy * i / steps));
             _lastPoint = e.Location;
         }
 
-        private void OnMouseUp(object sender, MouseEventArgs e) { _drawing = false; }
+        private void OnMouseUp(object sender, MouseEventArgs e)
+        {
+            _drawing = false;
+        }
 
         private void EraseAt(Point pt)
         {
             if (_picBox.Image == null) return;
             _hasDrawn = true;
             using var g = Graphics.FromImage(_picBox.Image);
-            g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+            g.CompositingMode = CompositingMode.SourceCopy;
             using var brush = new SolidBrush(Color.White);
-            g.FillEllipse(brush, pt.X - _eraserSize / 2, pt.Y - _eraserSize / 2, _eraserSize, _eraserSize);
+            int half = EraserSize / 2;
+            if (Shape == EraserShape.Circle)
+                g.FillEllipse(brush, pt.X - half, pt.Y - half, EraserSize, EraserSize);
+            else
+                g.FillRectangle(brush, pt.X - half, pt.Y - half, EraserSize, EraserSize);
             _picBox.Invalidate();
+        }
+
+        private void OnMouseEnter(object sender, EventArgs e)
+        {
+            if (_isActive)
+                UpdateCursor();
         }
 
         public Bitmap Stop()
@@ -92,6 +140,7 @@ namespace ScanTool.Services
             _picBox.MouseDown -= OnMouseDown;
             _picBox.MouseMove -= OnMouseMove;
             _picBox.MouseUp -= OnMouseUp;
+            _picBox.MouseEnter -= OnMouseEnter;
             return _snapshot;
         }
     }

@@ -74,20 +74,19 @@ namespace ScanTool.Controls
             InitializeComponent();
             _contextMenu = new ScanContextMenu(this, ConfirmForce);
             _processor = new ImageProcessor();
-            _editor = new ImageEditor(picPreview);
+            _editor = new ImageEditor(picPreview, status => lblStatus.Text = status);
             _listManager = new ScanListManager(dgvFiles);
             _toolbar = new ScanToolbar(panelTools, OnToolAction);
             _imageCache = new ImageCacheManager();
             _viewport = new ViewportController(picPreview);
-            _eraseController = new EraseController(picPreview);
+            _eraseController = new EraseController(picPreview, status => lblStatus.Text = status);
             _pdfExporter = new PdfExporter();
             _fileStatusManager = new FileStatusManager();
 
             _listManager.SelectedIndexChanged += OnPageSelected;
             this.cmbPreset.SelectedIndexChanged += cmbPreset_SelectedIndexChanged;
             this.cmbScanner.DropDown += (s, e) => LoadScanners(true);
-            btnMaxScan.Click += (s, e) => ScanMaxOnly();
-            btnAutoDetect.Click += (s, e) => ScanAutoDetect();
+           
             lblLocalPath.Click += (s, e) =>
             {
                 if (Directory.Exists(lblLocalPath.Text))
@@ -266,9 +265,9 @@ namespace ScanTool.Controls
         {
             cmbRepairMode.Items.Clear();
             cmbRepairMode.Items.Add("不自动修复");
-            cmbRepairMode.Items.Add("适当修复");
-            cmbRepairMode.Items.Add("深度修复");
-            cmbRepairMode.Items.Add("自动判断修复");
+            cmbRepairMode.Items.Add("适当修复【适用于新扫描纸张白色档案】");
+            cmbRepairMode.Items.Add("深度修复【适用于新扫描纸张发黄档案】");
+            cmbRepairMode.Items.Add("自动判断【适用于原党徽软件扫描档案】");
             if (_repairManager != null)
                 foreach (var p in _repairManager.CustomProfiles)
                     cmbRepairMode.Items.Add(p.Name);
@@ -399,36 +398,27 @@ namespace ScanTool.Controls
         {
             if (_currentArchid == 0) { MessageBox.Show("请先选择材料目录"); bmp.Dispose(); return; }
 
-            Bitmap finalBmp = bmp;
-            Bitmap repaired = null;
+            Bitmap finalBmp = null;
 
             try
             {
                 var profile = GetCurrentRepairProfile();
-                if (profile == null)  // 自动判断修复
+
+                if (profile == null)
                 {
                     var autoProfile = AutoRepairService.Analyze(bmp);
                     if (autoProfile != null && autoProfile.Name != "不自动修复")
-                    {
-                        repaired = AutoRepairService.Execute(bmp, autoProfile);
-                        if (repaired != null)
-                        {
-                            bmp.Dispose();
-                            finalBmp = repaired;
-                        }
-                    }
+                        finalBmp = AutoRepairService.Execute(bmp, autoProfile);
                 }
                 else if (profile.Name != "不自动修复")
                 {
-                    _processor.LoadImage(bmp);
-                    ApplyRepairProfile(profile);
-                    var procResult = _processor.CurrentBitmap;
-                    if (procResult != null)
-                    {
-                        bmp.Dispose();
-                        finalBmp = new Bitmap(procResult);
-                    }
+                    finalBmp = AutoRepairService.ApplyPreset(bmp, profile);
                 }
+
+                if (finalBmp == null)
+                    finalBmp = new Bitmap(bmp);
+
+                bmp.Dispose();
 
                 string outDir = Path.Combine(_scanDir, _currentRsid.PadLeft(8, '0'), _currentFl.ToString(), _currentArchid.ToString());
                 Directory.CreateDirectory(outDir);
@@ -442,35 +432,30 @@ namespace ScanTool.Controls
                     return;
                 }
 
+                // 保存到磁盘
                 using (var saveBmp = new Bitmap(finalBmp))
                 {
                     saveBmp.Save(path, ImageFormat.Jpeg);
                 }
 
                 _currentEditingFile = path;
+
+                // 直接显示内存中的修复结果，不从磁盘重新加载
+                _processor.LoadImage(finalBmp);
+                _editor.SetImage(finalBmp);
+                _viewport.SetOriginalImage(finalBmp);
+                _viewport.FitToScreen();
+
                 LoadExistingFiles();
                 _listManager.SelectPage(_scanCounter - 1);
-
-                // ✅ 修复：去掉多余的 new Bitmap()
-                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read))
-                using (var loaded = new Bitmap(fs))
-                {
-                    _processor.LoadImage(loaded);
-                    _editor.SetImage(loaded);
-                    _viewport.SetOriginalImage(loaded);
-                    _viewport.FitToScreen();
-                }
-
                 UpdateCurrentNodeStatus();
                 lblLocalPath.Text = outDir;
                 lblStatus.Text = $"扫描完成: {filename}（共{_scanCounter}/{_maxPages}页）";
             }
             finally
             {
-                if (finalBmp != null && finalBmp != bmp && finalBmp != repaired)
-                {
-                    finalBmp.Dispose();
-                }
+                // 注意：finalBmp 已经被 processor/editor/viewport 持有引用，不能在此 Dispose
+                // 这些对象会在下次 SetImage 或自身 Dispose 时释放旧图像
             }
         }
         // ==================== 文件列表 ====================
@@ -546,6 +531,7 @@ namespace ScanTool.Controls
             SaveCurrentToCache();
             _currentEditingFile = info.LocalPath;
 
+            // 优先从缓存加载（包含未保存的修改）
             var bmp = _imageCache.GetImage(info.LocalPath);
             if (bmp != null)
             {
@@ -557,7 +543,6 @@ namespace ScanTool.Controls
             }
             else if (File.Exists(info.LocalPath))
             {
-                // ✅ 修复：去掉多余的 new Bitmap()
                 using (var fs = new FileStream(info.LocalPath, FileMode.Open, FileAccess.Read))
                 {
                     var diskBmp = new Bitmap(fs);
@@ -598,8 +583,11 @@ namespace ScanTool.Controls
             if (_currentArchid == 0 && action == "scan") { _ = ScanOnePage(); return; }
             if (action != "erase" && action != "eraser_size_up" && action != "eraser_size_down") ExitEraseIfActive();
             var page = _listManager.GetFile(_listManager.SelectedIndex);
-            if (page == null && action != "scan" && action != "batch_scan" && action != "save_all" && action != "export_pdf" && action != "prev_page" && action != "next_page" && action != "zoom_in" && action != "zoom_out" && action != "fit_screen" && action != "reset_zoom" && action != "pan_down" && action != "pan_up" && action != "pan_left" && action != "pan_right" && action != "batch_category" && action != "batch_current_item" && action != "batch_from_current" && !action.StartsWith("jump_")) return;
-
+            if (page == null && action != "scan" && action != "batch_scan" && action != "save_all" &&
+                action != "export_pdf" && action != "prev_page" && action != "next_page" && action != "zoom_in" && 
+                action != "zoom_out" && action != "fit_screen" && action != "reset_zoom" && action != "pan_down" && 
+                action != "pan_up" && action != "pan_left" && action != "pan_right" && action != "batch_category" && 
+                action != "batch_current_item" && action != "batch_from_current" && !action.StartsWith("jump_")) return;
             switch (action)
             {
                 // 批量处理
@@ -663,17 +651,21 @@ namespace ScanTool.Controls
                     break;
                 case "denoise": Process(_processor.Denoise); break;
                 case "grayscale": Process(_processor.Grayscale); break;
-                case "crop":
-                    _viewport.EnableDrag = false;
-                    _editor.StartCrop();
-                    _editor.CropCompleted -= OnCropCompleted;
-                    _editor.CropCompleted += OnCropCompleted;
-                    break;
+               case "crop":
+    _viewport.EnableDrag = false;
+    _editor.StartCrop();
+    _editor.CropCompleted -= OnCropCompleted;
+    _editor.CropCompleted += OnCropCompleted;
+    break;
                 case "remove_border": Process(_processor.RemoveBlackBorder); break;
                 case "erase":
-                    _viewport.EnableDrag = false;
-                    _eraseController.Start();
-                    lblStatus.Text = "擦除模式: 拖动擦除 | +/-调整大小 | 点击其他按钮退出";
+                    if (_eraseController.IsActive)
+                        _eraseController.ToggleShape();
+                    else
+                    {
+                        _viewport.EnableDrag = false;
+                        _eraseController.Start();
+                    }
                     break;
                 case "eraser_size_up": _eraseController.SizeUp(); break;
                 case "eraser_size_down": _eraseController.SizeDown(); break;

@@ -28,6 +28,8 @@ namespace ScanTool.Services
 
                 bool hasStamp = DetectStamp(mat);
                 double skewAngle = DetectSkewAngle(mat);
+                bool hasBlackBorder = DetectBlackBorder(mat);
+                bool hasBindingHoles = DetectBindingHoles(mat);
 
                 profile.BackgroundBrightness = rBg;
 
@@ -35,87 +37,102 @@ namespace ScanTool.Services
                 Debug.WriteLine($"[AutoRepair] 背景 R:{rBg:F0} G:{gBg:F0} B:{bBg:F0} V:{vBg:F0}");
                 Debug.WriteLine($"[AutoRepair] 文字 R:{rText:F0}");
                 Debug.WriteLine($"[AutoRepair] 公章: {(hasStamp ? "有" : "无")}");
+                Debug.WriteLine($"[AutoRepair] 黑边: {(hasBlackBorder ? "有" : "无")}");
+                Debug.WriteLine($"[AutoRepair] 装订孔: {(hasBindingHoles ? "有" : "无")}");
 
+                // 倾斜检测
                 if (Math.Abs(skewAngle) > 1.5)
                 {
                     profile.AutoDeskew = true;
                     Debug.WriteLine($"[AutoRepair] 倾斜: {skewAngle:F1}°");
                 }
 
-                if (DetectBlackBorder(mat))
-                {
-                    profile.RemoveBlackBorder = true;
-                    Debug.WriteLine($"[AutoRepair] 黑边: 有");
-                }
+                // 黑边检测（独立处理，不受背景色影响）
+                profile.RemoveBlackBorder = hasBlackBorder;
 
-                if (DetectBindingHoles(mat))
-                {
-                    profile.FillBindingHoles = true;
-                    Debug.WriteLine($"[AutoRepair] 装订孔: 有");
-                }
+                // 装订孔检测
+                profile.FillBindingHoles = hasBindingHoles;
 
-                // ========== 决策 ==========
-                profile.NeedBackgroundRemove = true;
+                // ========== 决策：背景处理 ==========
                 double fBase;
                 double maskThreshold;
 
                 if (hasStamp)
                 {
                     profile.Diagnosis = "有公章";
+                    profile.NeedBackgroundRemove = true;
                     fBase = 1.03;
                     maskThreshold = 210;
                 }
                 else if (vBg < 180)
                 {
                     profile.Diagnosis = "发黑";
+                    profile.NeedBackgroundRemove = true;
                     fBase = 1.15;
                     maskThreshold = 100;
                 }
                 else if (rBg < 190)
                 {
                     profile.Diagnosis = "暗黄";
+                    profile.NeedBackgroundRemove = true;
                     fBase = 1.12;
                     maskThreshold = 140;
                 }
-                else if (bBg < 190)
+                else if (bBg < 200)
                 {
                     profile.Diagnosis = "暖黄";
+                    profile.NeedBackgroundRemove = true;
                     fBase = 1.10;
                     maskThreshold = 130;
                 }
                 else if (rBg < 210)
                 {
                     profile.Diagnosis = "发黄";
+                    profile.NeedBackgroundRemove = true;
                     fBase = 1.08;
                     maskThreshold = 170;
                 }
                 else if (rBg < 225)
                 {
                     profile.Diagnosis = "中黄";
+                    profile.NeedBackgroundRemove = true;
                     fBase = 1.06;
                     maskThreshold = 195;
                 }
                 else if (rBg < 240)
                 {
                     profile.Diagnosis = "微黄";
+                    profile.NeedBackgroundRemove = true;
                     fBase = 1.05;
                     maskThreshold = 210;
                 }
                 else
                 {
                     profile.Diagnosis = "正常";
-                    fBase = 1.03;
+                    profile.NeedBackgroundRemove = false;
+                    profile.Contrast = false;
+                    fBase = 1.0;
                     maskThreshold = 210;
                 }
 
+                // 文字偏淡时增强对比度
                 if (rText > 120) fBase += 0.03;
                 else if (rText > 100) fBase += 0.02;
+
+                // 如果有黑边，即使背景正常也要进行背景处理
+                if (hasBlackBorder && !profile.NeedBackgroundRemove)
+                {
+                    profile.NeedBackgroundRemove = true;
+                    profile.Contrast = true;
+                    fBase = 1.02;
+                    Debug.WriteLine($"[AutoRepair] 检测到黑边，启用背景处理");
+                }
 
                 profile.Contrast = true;
                 profile.ContrastValue = fBase;
                 profile.MaskThreshold = maskThreshold;
 
-                Debug.WriteLine($"[AutoRepair] 判定: {profile.Diagnosis} → 遮罩阈值={maskThreshold} F={fBase:F2} +背景变白");
+                Debug.WriteLine($"[AutoRepair] 判定: {profile.Diagnosis} → 遮罩阈值={maskThreshold} F={fBase:F2} RemoveBlackBorder={profile.RemoveBlackBorder}");
             }
 
             return profile;
@@ -125,6 +142,7 @@ namespace ScanTool.Services
 
         public static Bitmap Execute(Bitmap bmp, RepairProfile profile)
         {
+            Debug.WriteLine($"[Execute] RemoveBlackBorder={profile.RemoveBlackBorder}, NeedBgRemove={profile.NeedBackgroundRemove}, Contrast={profile.Contrast}");
             if (profile == null || profile.Name == "不自动修复")
                 return new Bitmap(bmp);
 
@@ -134,8 +152,20 @@ namespace ScanTool.Services
             try
             {
                 result = bmp.ToMat();
+
+                // ✅ 优先去除黑边（独立执行，不受其他条件影响）
+                if (profile.RemoveBlackBorder)
+                {
+                    Debug.WriteLine($"[AutoRepair] 执行黑边去除");
+                    var tmp = RemoveBlackBorder(result);
+                    result.Dispose();
+                    result = tmp;
+                }
+
+                // 创建文字遮罩（基于去黑边后的图像）
                 textMask = CreateTextMask(result, profile.MaskThreshold);
 
+                // 倾斜矫正
                 if (profile.AutoDeskew)
                 {
                     var tmp = Deskew(result);
@@ -145,18 +175,11 @@ namespace ScanTool.Services
                     textMask = CreateTextMask(result, profile.MaskThreshold);
                 }
 
+                // 填充装订孔
                 if (profile.FillBindingHoles)
                     FillBindingHoles(result);
 
-                if (profile.RemoveBlackBorder)
-                {
-                    var tmp = RemoveBlackBorder(result);
-                    result.Dispose();
-                    result = tmp;
-                    textMask.Dispose();
-                    textMask = CreateTextMask(result, profile.MaskThreshold);
-                }
-
+                // 背景变白
                 if (profile.NeedBackgroundRemove)
                 {
                     Debug.WriteLine($"[AutoRepair] 执行背景变白");
@@ -165,6 +188,7 @@ namespace ScanTool.Services
                     result.SetTo(new Scalar(255, 255, 255), bgMask);
                 }
 
+                // 对比度增强
                 if (profile.Contrast)
                 {
                     Debug.WriteLine($"[AutoRepair] 执行 F: {profile.ContrastValue:F2}");
@@ -361,35 +385,110 @@ namespace ScanTool.Services
         private static bool DetectBlackBorder(Mat src)
         {
             using var gray = ToGray(src);
-            int w = src.Width, h = src.Height, margin = 10;
+            int w = src.Width, h = src.Height;
+            int margin = Math.Max(20, (int)(src.Width * 0.03));
             double top = Cv2.Mean(gray[new OpenCvSharp.Rect(0, 0, w, margin)]).Val0;
             double bottom = Cv2.Mean(gray[new OpenCvSharp.Rect(0, h - margin, w, margin)]).Val0;
             double left = Cv2.Mean(gray[new OpenCvSharp.Rect(0, 0, margin, h)]).Val0;
             double right = Cv2.Mean(gray[new OpenCvSharp.Rect(w - margin, 0, margin, h)]).Val0;
-            return top < 35 || bottom < 35 || left < 35 || right < 35;
+            Debug.WriteLine($"[DetectBlackBorder] margin={margin} top={top:F0} bottom={bottom:F0} left={left:F0} right={right:F0}");
+            return top < 200 || bottom < 200 || left < 200 || right < 200;
         }
-
         private static Mat RemoveBlackBorder(Mat src)
         {
-            using var gray = ToGray(src);
-            using var binary = new Mat();
-            Cv2.Threshold(gray, binary, 30, 255, ThresholdTypes.Binary);
-            Cv2.FindContours(binary, out var contours, out _, RetrievalModes.External, ContourApproximationModes.ApproxSimple);
-            if (contours.Length == 0) return src.Clone();
-            int bestIdx = 0;
-            double maxArea = 0;
-            for (int i = 0; i < contours.Length; i++)
+            Mat gray;
+            if (src.Channels() == 4)
             {
-                double area = Cv2.ContourArea(contours[i]);
-                if (area > maxArea) { maxArea = area; bestIdx = i; }
+                gray = new Mat();
+                Cv2.CvtColor(src, gray, ColorConversionCodes.BGRA2GRAY);
             }
-            var rect = Cv2.BoundingRect(contours[bestIdx]);
-            int m = 2;
-            rect.X = Math.Max(0, rect.X - m);
-            rect.Y = Math.Max(0, rect.Y - m);
-            rect.Width = Math.Min(src.Width - rect.X, rect.Width + m * 2);
-            rect.Height = Math.Min(src.Height - rect.Y, rect.Height + m * 2);
-            return new Mat(src, rect).Clone();
+            else if (src.Channels() == 3)
+            {
+                gray = new Mat();
+                Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
+            }
+            else
+            {
+                gray = src.Clone();
+            }
+
+            using (gray)
+            {
+                int w = gray.Width, h = gray.Height;
+                int sample = 10;
+                int margin = Math.Max(20, (int)(w * 0.03));
+
+                double tl = Cv2.Mean(gray[new OpenCvSharp.Rect(0, 0, sample, sample)]).Val0;
+                double tr = Cv2.Mean(gray[new OpenCvSharp.Rect(w - sample, 0, sample, sample)]).Val0;
+                double bl = Cv2.Mean(gray[new OpenCvSharp.Rect(0, h - sample, sample, sample)]).Val0;
+                double br = Cv2.Mean(gray[new OpenCvSharp.Rect(w - sample, h - sample, sample, sample)]).Val0;
+
+                double topStrip = Cv2.Mean(gray[new OpenCvSharp.Rect(0, 0, w, margin)]).Val0;
+                double bottomStrip = Cv2.Mean(gray[new OpenCvSharp.Rect(0, h - margin, w, margin)]).Val0;
+
+                Debug.WriteLine($"[RemoveBlackBorder] 四角: TL={tl:F0} TR={tr:F0} BL={bl:F0} BR={br:F0} 条带: top={topStrip:F0} bottom={bottomStrip:F0}");
+
+                int topFill = 0, bottomFill = 0;
+
+                // === 顶部：直接找白纸隔离带 ===
+                double topDark = Math.Min(topStrip, Math.Min(tl, tr));
+                if (topDark < 200)
+                {
+                    // 从第0行开始，找连续3行都>240的白纸区域
+                    for (int y = 0; y < h / 3; y++)
+                    {
+                        bool allWhite = true;
+                        for (int k = 0; k < 3; k++)
+                        {
+                            double rowMean = Cv2.Mean(gray[new OpenCvSharp.Rect(0, y + k, w, 1)]).Val0;
+                            if (rowMean < 240) { allWhite = false; break; }
+                        }
+                        if (allWhite)
+                        {
+                            topFill = y;
+                            Debug.WriteLine($"[RemoveBlackBorder] 顶部白纸隔离带: y={y}");
+                            break;
+                        }
+                    }
+                }
+
+                // === 底部 ===
+                double bottomDark = Math.Min(bottomStrip, Math.Min(bl, br));
+                if (bottomDark < 200)
+                {
+                    for (int y = h - 1; y > h * 2 / 3; y--)
+                    {
+                        bool allWhite = true;
+                        for (int k = 0; k < 3; k++)
+                        {
+                            double rowMean = Cv2.Mean(gray[new OpenCvSharp.Rect(0, y - k, w, 1)]).Val0;
+                            if (rowMean < 240) { allWhite = false; break; }
+                        }
+                        if (allWhite)
+                        {
+                            bottomFill = h - 1 - y;
+                            Debug.WriteLine($"[RemoveBlackBorder] 底部白纸隔离带: y={y}");
+                            break;
+                        }
+                    }
+                }
+
+                if (topFill > h * 0.20) topFill = 0;
+                if (bottomFill > h * 0.20) bottomFill = 0;
+
+                Debug.WriteLine($"[RemoveBlackBorder] 填充: top={topFill} bottom={bottomFill}");
+
+                if (topFill == 0 && bottomFill == 0)
+                    return src.Clone();
+
+                Mat result = src.Clone();
+                if (topFill > 0)
+                    result[new OpenCvSharp.Rect(0, 0, w, topFill)].SetTo(Scalar.White);
+                if (bottomFill > 0)
+                    result[new OpenCvSharp.Rect(0, h - bottomFill, w, bottomFill)].SetTo(Scalar.White);
+
+                return result;
+            }
         }
 
         // ==================== 装订孔检测与填充 ====================
@@ -474,13 +573,41 @@ namespace ScanTool.Services
 
         private static Mat ToGray(Mat src)
         {
-            if (src.Channels() == 3)
-            {
-                var gray = new Mat();
+            var gray = new Mat();
+            if (src.Channels() == 4)
+                Cv2.CvtColor(src, gray, ColorConversionCodes.BGRA2GRAY);
+            else if (src.Channels() == 3)
                 Cv2.CvtColor(src, gray, ColorConversionCodes.BGR2GRAY);
-                return gray;
-            }
-            return src.Clone();
+            else
+                return src.Clone();
+            return gray;
+        }
+        public static Bitmap ApplyPreset(Bitmap bmp, RepairProfile profile, Action<Bitmap> onPreview = null)
+        {
+            if (profile == null || profile.Name == "不自动修复")
+                return new Bitmap(bmp);
+
+            Debug.WriteLine($"[ApplyPreset] === {profile.Name} ===");
+
+            Mat result = bmp.ToMat();
+            var beforeMean = Cv2.Mean(result).Val0;
+
+            if (profile.AutoDeskew) result = Deskew(result);
+            if (profile.Denoise) { var r = new Mat(); Cv2.MedianBlur(result, r, 3); result.Dispose(); result = r; }
+            if (profile.Grayscale) { var r = new Mat(); Cv2.CvtColor(result, r, ColorConversionCodes.BGR2GRAY); Cv2.CvtColor(r, result, ColorConversionCodes.GRAY2BGR); r.Dispose(); }
+            if (profile.Brightness) result.ConvertTo(result, MatType.CV_8UC3, 1.0, profile.BrightnessValue);
+            if (profile.Contrast) result.ConvertTo(result, MatType.CV_8UC3, profile.ContrastValue, 0);
+
+            var afterMean = Cv2.Mean(result).Val0;
+            Debug.WriteLine($"[ApplyPreset] 修复前 mean={beforeMean:F0} → 修复后 mean={afterMean:F0}");
+
+            var bmpResult = result.ToBitmap();
+            result.Dispose();
+
+            // 回调更新预览
+            onPreview?.Invoke(bmpResult);
+
+            return bmpResult;
         }
     }
 }

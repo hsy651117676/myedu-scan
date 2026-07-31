@@ -13,8 +13,6 @@ namespace ScanTool.Controls
         private Label lblLocalPath;
         private ComboBox cmbScanner;
         private ComboBox cmbPreset;
-        private Button btnMaxScan;
-        private Button btnAutoDetect;
         private ComboBox cmbColorMode;
         private ComboBox cmbRepairMode;
         private SplitContainer splitMain;
@@ -47,8 +45,6 @@ namespace ScanTool.Controls
             this.cmbPreset = new System.Windows.Forms.ComboBox();
             this.cmbColorMode = new System.Windows.Forms.ComboBox();
             this.cmbRepairMode = new System.Windows.Forms.ComboBox();
-            this.btnMaxScan = new System.Windows.Forms.Button();
-            this.btnAutoDetect = new System.Windows.Forms.Button();
             this.panelInfo = new System.Windows.Forms.Panel();
             this.lblPersonInfo = new System.Windows.Forms.Label();
             this.lblLocalPath = new System.Windows.Forms.Label();
@@ -94,12 +90,10 @@ namespace ScanTool.Controls
             this.panelTop.Controls.Add(this.cmbPreset);
             this.panelTop.Controls.Add(this.cmbColorMode);
             this.panelTop.Controls.Add(this.cmbRepairMode);
-            this.panelTop.Controls.Add(this.btnMaxScan);
-            this.panelTop.Controls.Add(this.btnAutoDetect);
             this.panelTop.Dock = System.Windows.Forms.DockStyle.Top;
             this.panelTop.Location = new System.Drawing.Point(0, 0);
             this.panelTop.Name = "panelTop";
-            this.panelTop.Size = new System.Drawing.Size(1043, 60);
+            this.panelTop.Size = new System.Drawing.Size(1159, 35);
             this.panelTop.TabIndex = 3;
             // 
             // cmbScanner
@@ -145,45 +139,27 @@ namespace ScanTool.Controls
             "深度修复"});
             this.cmbRepairMode.Location = new System.Drawing.Point(844, 4);
             this.cmbRepairMode.Name = "cmbRepairMode";
-            this.cmbRepairMode.Size = new System.Drawing.Size(130, 27);
+            this.cmbRepairMode.Size = new System.Drawing.Size(311, 27);
             this.cmbRepairMode.TabIndex = 6;
-            // 
-            // btnMaxScan
-            // 
-            this.btnMaxScan.Font = new System.Drawing.Font("微软雅黑", 9F);
-            this.btnMaxScan.Location = new System.Drawing.Point(980, 4);
-            this.btnMaxScan.Name = "btnMaxScan";
-            this.btnMaxScan.Size = new System.Drawing.Size(70, 28);
-            this.btnMaxScan.TabIndex = 2;
-            this.btnMaxScan.Text = "最大面积";
-            // 
-            // btnAutoDetect
-            // 
-            this.btnAutoDetect.Font = new System.Drawing.Font("微软雅黑", 9F);
-            this.btnAutoDetect.Location = new System.Drawing.Point(1056, 4);
-            this.btnAutoDetect.Name = "btnAutoDetect";
-            this.btnAutoDetect.Size = new System.Drawing.Size(70, 28);
-            this.btnAutoDetect.TabIndex = 3;
-            this.btnAutoDetect.Text = "自动识别";
             // 
             // panelInfo
             // 
             this.panelInfo.Controls.Add(this.lblPersonInfo);
             this.panelInfo.Controls.Add(this.lblLocalPath);
             this.panelInfo.Dock = System.Windows.Forms.DockStyle.Top;
-            this.panelInfo.Location = new System.Drawing.Point(0, 60);
+            this.panelInfo.Location = new System.Drawing.Point(0, 35);
             this.panelInfo.Name = "panelInfo";
             this.panelInfo.Padding = new System.Windows.Forms.Padding(4, 2, 4, 0);
-            this.panelInfo.Size = new System.Drawing.Size(1043, 22);
+            this.panelInfo.Size = new System.Drawing.Size(1159, 41);
             this.panelInfo.TabIndex = 2;
             // 
             // lblPersonInfo
             // 
             this.lblPersonInfo.AutoSize = true;
-            this.lblPersonInfo.Font = new System.Drawing.Font("微软雅黑", 9F);
+            this.lblPersonInfo.Font = new System.Drawing.Font("微软雅黑", 16F);
             this.lblPersonInfo.Location = new System.Drawing.Point(4, 3);
             this.lblPersonInfo.Name = "lblPersonInfo";
-            this.lblPersonInfo.Size = new System.Drawing.Size(0, 17);
+            this.lblPersonInfo.Size = new System.Drawing.Size(0, 30);
             this.lblPersonInfo.TabIndex = 0;
             // 
             // lblLocalPath
@@ -191,18 +167,18 @@ namespace ScanTool.Controls
             this.lblLocalPath.AutoSize = true;
             this.lblLocalPath.Cursor = System.Windows.Forms.Cursors.Hand;
             this.lblLocalPath.Dock = System.Windows.Forms.DockStyle.Right;
-            this.lblLocalPath.Font = new System.Drawing.Font("微软雅黑", 8F);
+            this.lblLocalPath.Font = new System.Drawing.Font("微软雅黑", 14F);
             this.lblLocalPath.ForeColor = System.Drawing.Color.Blue;
-            this.lblLocalPath.Location = new System.Drawing.Point(1039, 2);
+            this.lblLocalPath.Location = new System.Drawing.Point(1155, 2);
             this.lblLocalPath.Name = "lblLocalPath";
-            this.lblLocalPath.Size = new System.Drawing.Size(0, 16);
+            this.lblLocalPath.Size = new System.Drawing.Size(0, 25);
             this.lblLocalPath.TabIndex = 1;
             this.lblLocalPath.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
             // 
             // splitMain
             // 
             this.splitMain.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.splitMain.Location = new System.Drawing.Point(0, 82);
+            this.splitMain.Location = new System.Drawing.Point(0, 76);
             this.splitMain.Name = "splitMain";
             // 
             // splitMain.Panel1
@@ -212,8 +188,8 @@ namespace ScanTool.Controls
             // splitMain.Panel2
             // 
             this.splitMain.Panel2.Controls.Add(this.splitRight);
-            this.splitMain.Size = new System.Drawing.Size(1043, 405);
-            this.splitMain.SplitterDistance = 272;
+            this.splitMain.Size = new System.Drawing.Size(1159, 411);
+            this.splitMain.SplitterDistance = 302;
             this.splitMain.TabIndex = 1;
             // 
             // tvMaterials
@@ -223,7 +199,7 @@ namespace ScanTool.Controls
             this.tvMaterials.HideSelection = false;
             this.tvMaterials.Location = new System.Drawing.Point(0, 0);
             this.tvMaterials.Name = "tvMaterials";
-            this.tvMaterials.Size = new System.Drawing.Size(272, 405);
+            this.tvMaterials.Size = new System.Drawing.Size(302, 411);
             this.tvMaterials.TabIndex = 0;
             // 
             // splitRight
@@ -240,8 +216,8 @@ namespace ScanTool.Controls
             // 
             this.splitRight.Panel2.Controls.Add(this.panelPreview);
             this.splitRight.Panel2.Controls.Add(this.panelTools);
-            this.splitRight.Size = new System.Drawing.Size(767, 405);
-            this.splitRight.SplitterDistance = 204;
+            this.splitRight.Size = new System.Drawing.Size(853, 411);
+            this.splitRight.SplitterDistance = 226;
             this.splitRight.TabIndex = 0;
             // 
             // dgvFiles
@@ -250,7 +226,7 @@ namespace ScanTool.Controls
             this.dgvFiles.Dock = System.Windows.Forms.DockStyle.Fill;
             this.dgvFiles.Location = new System.Drawing.Point(0, 0);
             this.dgvFiles.Name = "dgvFiles";
-            this.dgvFiles.Size = new System.Drawing.Size(204, 405);
+            this.dgvFiles.Size = new System.Drawing.Size(226, 411);
             this.dgvFiles.TabIndex = 0;
             // 
             // menuFileContext
@@ -321,7 +297,7 @@ namespace ScanTool.Controls
             this.panelPreview.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panelPreview.Location = new System.Drawing.Point(0, 0);
             this.panelPreview.Name = "panelPreview";
-            this.panelPreview.Size = new System.Drawing.Size(359, 405);
+            this.panelPreview.Size = new System.Drawing.Size(423, 411);
             this.panelPreview.TabIndex = 0;
             // 
             // picPreview
@@ -330,7 +306,7 @@ namespace ScanTool.Controls
             this.picPreview.Dock = System.Windows.Forms.DockStyle.Fill;
             this.picPreview.Location = new System.Drawing.Point(0, 0);
             this.picPreview.Name = "picPreview";
-            this.picPreview.Size = new System.Drawing.Size(359, 405);
+            this.picPreview.Size = new System.Drawing.Size(423, 411);
             this.picPreview.TabIndex = 0;
             this.picPreview.TabStop = false;
             // 
@@ -338,9 +314,9 @@ namespace ScanTool.Controls
             // 
             this.panelTools.AutoScroll = true;
             this.panelTools.Dock = System.Windows.Forms.DockStyle.Right;
-            this.panelTools.Location = new System.Drawing.Point(359, 0);
+            this.panelTools.Location = new System.Drawing.Point(423, 0);
             this.panelTools.Name = "panelTools";
-            this.panelTools.Size = new System.Drawing.Size(200, 405);
+            this.panelTools.Size = new System.Drawing.Size(200, 411);
             this.panelTools.TabIndex = 1;
             // 
             // statusStrip1
@@ -350,7 +326,7 @@ namespace ScanTool.Controls
             this.lblStatus});
             this.statusStrip1.Location = new System.Drawing.Point(0, 487);
             this.statusStrip1.Name = "statusStrip1";
-            this.statusStrip1.Size = new System.Drawing.Size(1043, 28);
+            this.statusStrip1.Size = new System.Drawing.Size(1159, 28);
             this.statusStrip1.TabIndex = 4;
             // 
             // progressBar1
@@ -378,7 +354,7 @@ namespace ScanTool.Controls
             this.Controls.Add(this.statusStrip1);
             this.Font = new System.Drawing.Font("微软雅黑", 9F);
             this.Name = "ScanControl";
-            this.Size = new System.Drawing.Size(1043, 515);
+            this.Size = new System.Drawing.Size(1159, 515);
             this.panelTop.ResumeLayout(false);
             this.panelInfo.ResumeLayout(false);
             this.panelInfo.PerformLayout();

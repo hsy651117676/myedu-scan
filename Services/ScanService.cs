@@ -245,7 +245,8 @@ namespace ScanTool.Services
             {
                 using var mat = scanned.ToMat();
                 using var gray = new Mat();
-                if (mat.Channels() == 3) Cv2.CvtColor(mat, gray, ColorConversionCodes.BGR2GRAY);
+                if (mat.Channels() == 4) Cv2.CvtColor(mat, gray, ColorConversionCodes.BGRA2GRAY);
+                else if (mat.Channels() == 3) Cv2.CvtColor(mat, gray, ColorConversionCodes.BGR2GRAY);
                 else mat.CopyTo(gray);
                 using var binary = new Mat();
                 Cv2.Threshold(gray, binary, 0, 255, ThresholdTypes.Binary | ThresholdTypes.Otsu);

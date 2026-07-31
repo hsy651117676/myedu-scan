@@ -99,12 +99,8 @@ namespace ScanTool.Controls
 
             _lblStatus.Text = $"当前类【{profile?.Name ?? "自动判断修复"}】处理中...";
 
-            int loopCount = 0;
-
             while (true)
             {
-                loopCount++;
-
                 string localDir = Path.Combine(_scanDir, _owner.CurrentRsid.PadLeft(8, '0'), _owner.CurrentFl.ToString(), _owner.CurrentArchid.ToString());
 
                 bool hasFiles = false;
@@ -329,25 +325,15 @@ namespace ScanTool.Controls
                     try
                     {
                         originalBmp = new Bitmap(info.LocalPath);
-                        _processor.LoadImage(originalBmp);
-                        _editor.SetImage(originalBmp);
-                        _viewport.SetOriginalImage(originalBmp);
-                        _viewport.FitToScreen();
-
-                        await Task.Delay(10);
 
                         if (profile == null)
                         {
                             Debug.WriteLine($"[BatchRepair] 材料: {_tvMaterials.SelectedNode?.Text}, 文件: {info.Filename}");
                             var autoProfile = AutoRepairService.Analyze(originalBmp);
                             if (autoProfile != null && autoProfile.Name != "不自动修复")
-                            {
                                 result = AutoRepairService.Execute(originalBmp, autoProfile);
-                            }
                             else
-                            {
                                 result = new Bitmap(originalBmp);
-                            }
 
                             if (result != null)
                             {
@@ -355,55 +341,51 @@ namespace ScanTool.Controls
                                 _editor.SetImage(result);
                                 _viewport.SetOriginalImage(result);
                                 _viewport.FitToScreen();
+                                // 强制刷新界面
+                                Application.DoEvents();
                             }
 
-                            await Task.Delay(10);
                             var finalResult = _processor.CurrentBitmap ?? result;
-                            if (finalResult != null)
-                            {
+                            if (finalResult != null && (autoProfile?.NeedBackgroundRemove == true || (autoProfile?.Contrast == true && autoProfile.ContrastValue > 1.0)))
                                 _imageCache.Store(info.LocalPath, finalResult);
-                            }
+
+                            _lblStatus.Text = $"【自动判断修复】{info.Filename} | {autoProfile?.Diagnosis} 阈值:{autoProfile?.MaskThreshold:F0} F:{autoProfile?.ContrastValue:F2}";
                         }
                         else if (profile.Name != "不自动修复")
                         {
-                            _processor.LoadImage(originalBmp);
-
-                            if (profile.AutoDeskew) _processor.AutoDeskew();
-                            if (profile.Denoise) _processor.Denoise();
-                            if (profile.RemoveBlackBorder) _processor.RemoveBlackBorder();
-                            if (profile.Grayscale) _processor.Grayscale();
-                            if (profile.Brightness) _processor.Brightness(profile.BrightnessValue);
-                            if (profile.Contrast) _processor.Contrast(profile.ContrastValue);
-
-                            var procResult = _processor.CurrentBitmap;
-                            if (procResult != null)
+                            result = AutoRepairService.ApplyPreset(originalBmp, profile, res =>
                             {
-                                _editor.SetImage(procResult);
-                                _viewport.SetOriginalImage(procResult);
+                                _processor.LoadImage(res);
+                                _editor.SetImage(res);
+                                _viewport.SetOriginalImage(res);
                                 _viewport.FitToScreen();
-                                _imageCache.Store(info.LocalPath, procResult);
-                            }
+                                // 强制刷新界面
+                                Application.DoEvents();
+                            });
+                            _imageCache.Store(info.LocalPath, result);
+                            _lblStatus.Text = $"【{profile.Name}】已处理: {info.Filename}";
                         }
                         else
                         {
                             result = new Bitmap(originalBmp);
                             _imageCache.Store(info.LocalPath, result);
+                            _lblStatus.Text = $"【{profile.Name}】已处理: {info.Filename}";
                         }
 
-                        _lblStatus.Text = $"【{profile?.Name ?? "自动判断修复"}】已处理: {info.Filename}";
+                        // 再次强制刷新状态栏
+                        Application.DoEvents();
                     }
                     finally
                     {
                         originalBmp?.Dispose();
                         if (result != null && result != _processor.CurrentBitmap)
-                        {
                             result.Dispose();
-                        }
                     }
                 }
                 else
                 {
                     _lblStatus.Text = $"跳过: {info?.Filename ?? "空"}";
+                    Application.DoEvents();
                 }
 
                 if (idx >= total - 1)
@@ -421,6 +403,9 @@ namespace ScanTool.Controls
                     if (afterIdx == beforeIdx && _listManager.Count == total)
                         break;
                 }
+
+                // 翻页后强制刷新
+                Application.DoEvents();
             }
 
             _loadExistingFiles();
@@ -456,9 +441,7 @@ namespace ScanTool.Controls
             foreach (TreeNode child in parent.Nodes)
             {
                 if (child.Tag is NodeTag tag && tag.Archid != null && int.Parse(tag.Fl) == fl)
-                {
                     result.Add(child);
-                }
                 CollectMaterialNodes(child, fl, result);
             }
         }
@@ -468,9 +451,7 @@ namespace ScanTool.Controls
             foreach (TreeNode child in parent.Nodes)
             {
                 if (child.Tag is NodeTag tag && tag.Archid != null && int.Parse(tag.Fl) == fl)
-                {
                     result.Add(child);
-                }
                 CollectAllMaterialNodes(child, fl, result);
             }
         }
@@ -489,26 +470,22 @@ namespace ScanTool.Controls
             foreach (TreeNode child in flNode.Nodes)
             {
                 if (child.Tag is NodeTag tag && tag.Archid != null)
-                {
                     result.Add(child);
-                }
                 else
-                {
                     CollectAllMaterialNodesInFl(child, result);
-                }
             }
         }
 
         // ==================== 替换扫描 ====================
 
         public void ReplaceScan(Dictionary<string, List<ScanRecord>> allScans,
-    ScanService scanService, ImageCacheManager imageCache, ImageProcessor processor,
-    ImageEditor editor, ViewportController viewport, ScanListManager listManager,
-    string scanDir, string currentRsid, int currentFl, int currentArchid,
-    Func<string> getColorMode, Func<CropPreset> getCurrentPreset,
-    Action<string> setEditingFile, Func<string> getEditingFile,
-    Action loadExistingFiles, Action updateNodeStatus, Action<string> setLocalPath,
-    Func<RepairProfile> getRepairProfile)
+     ScanService scanService, ImageCacheManager imageCache, ImageProcessor processor,
+     ImageEditor editor, ViewportController viewport, ScanListManager listManager,
+     string scanDir, string currentRsid, int currentFl, int currentArchid,
+     Func<string> getColorMode, Func<CropPreset> getCurrentPreset,
+     Action<string> setEditingFile, Func<string> getEditingFile,
+     Action loadExistingFiles, Action updateNodeStatus, Action<string> setLocalPath,
+     Func<RepairProfile> getRepairProfile)
         {
             var info = listManager.GetFile(listManager.SelectedIndex);
             if (info == null)
@@ -552,7 +529,7 @@ namespace ScanTool.Controls
                 }
 
                 var profile = getRepairProfile();
-                Bitmap finalBmp = bmp;
+                Bitmap finalBmp = null;
 
                 try
                 {
@@ -560,44 +537,42 @@ namespace ScanTool.Controls
                     {
                         var autoProfile = AutoRepairService.Analyze(bmp);
                         if (autoProfile != null && autoProfile.Name != "不自动修复")
-                        {
-                            var repaired = AutoRepairService.Execute(bmp, autoProfile);
-                            if (repaired != null)
-                            {
-                                bmp.Dispose();
-                                finalBmp = repaired;
-                            }
-                        }
+                            finalBmp = AutoRepairService.Execute(bmp, autoProfile);
                     }
                     else if (profile.Name != "不自动修复")
                     {
-                        processor.LoadImage(bmp);
-
-                        if (profile.AutoDeskew) processor.AutoDeskew();
-                        if (profile.Denoise) processor.Denoise();
-                        if (profile.RemoveBlackBorder) processor.RemoveBlackBorder();
-                        if (profile.Grayscale) processor.Grayscale();
-                        if (profile.Brightness) processor.Brightness(profile.BrightnessValue);
-                        if (profile.Contrast) processor.Contrast(profile.ContrastValue);
-
-                        var repaired = processor.CurrentBitmap;
-                        if (repaired != null)
+                        finalBmp = AutoRepairService.ApplyPreset(bmp, profile, res =>
                         {
-                            bmp.Dispose();
-                            finalBmp = new Bitmap(repaired);
-                        }
+                            processor.LoadImage(res);
+                            editor.SetImage(res);
+                            viewport.SetOriginalImage(res);
+                            viewport.FitToScreen();
+                        });
                     }
+
+                    if (finalBmp == null)
+                        finalBmp = new Bitmap(bmp);
+
+                    bmp.Dispose();
 
                     string outDir = Path.Combine(scanDir, currentRsid.PadLeft(8, '0'), currentFl.ToString(), currentArchid.ToString());
                     Directory.CreateDirectory(outDir);
                     string path = Path.Combine(outDir, info.Filename);
 
+                    // 保存到磁盘
                     using (var saveBmp = new Bitmap(finalBmp))
                     {
                         saveBmp.Save(path, System.Drawing.Imaging.ImageFormat.Jpeg);
                     }
 
                     setEditingFile(path);
+
+                    // 直接显示内存中的修复结果
+                    processor.LoadImage(finalBmp);
+                    editor.SetImage(finalBmp);
+                    viewport.SetOriginalImage(finalBmp);
+                    viewport.FitToScreen();
+
                     loadExistingFiles();
                     int newIdx = -1;
                     for (int i = 0; i < listManager.Count; i++)
@@ -611,15 +586,6 @@ namespace ScanTool.Controls
                     }
                     if (newIdx >= 0) listManager.SelectPage(newIdx);
 
-                    using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read))
-                    using (var loaded = new Bitmap(fs))
-                    {
-                        processor.LoadImage(loaded);
-                        editor.SetImage(loaded);
-                        viewport.SetOriginalImage(loaded);
-                        viewport.FitToScreen();
-                    }
-
                     imageCache.MarkDirty(path);
                     updateNodeStatus();
                     setLocalPath(outDir);
@@ -627,10 +593,7 @@ namespace ScanTool.Controls
                 }
                 finally
                 {
-                    if (finalBmp != null && finalBmp != bmp)
-                    {
-                        finalBmp.Dispose();
-                    }
+                    finalBmp?.Dispose();
                 }
             }
             catch (Exception ex)

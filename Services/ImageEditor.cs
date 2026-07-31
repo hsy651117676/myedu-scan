@@ -1,5 +1,6 @@
 ﻿// Services/ImageEditor.cs
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -9,6 +10,7 @@ namespace ScanTool.Services
     public class ImageEditor
     {
         private readonly PictureBox _picBox;
+        private readonly Action<string> _onStatusChanged;
         private Image _originalImage;
         private float _zoomFactor = 1.0f;
         private Point _panOffset = Point.Empty;
@@ -23,15 +25,13 @@ namespace ScanTool.Services
         private Point _deskewEnd;
         private Action<double> _onDeskewComplete;
 
-        private bool _isErasing;
-        private int _eraserSize = 20;
-
         private bool _isPanning;
         private Point _panStart;
 
-        public ImageEditor(PictureBox picBox)
+        public ImageEditor(PictureBox picBox, Action<string> onStatusChanged = null)
         {
             _picBox = picBox;
+            _onStatusChanged = onStatusChanged;
             _picBox.MouseWheel += OnMouseWheel;
         }
 
@@ -66,7 +66,16 @@ namespace ScanTool.Services
                 _zoomFactor = Math.Min(wRatio, hRatio);
                 ApplyZoom();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[ImageEditor.FitToScreen] 错误: {ex.Message}");
+                // 降级处理：直接设置图片
+                try
+                {
+                    _picBox.Image = new Bitmap(_originalImage);
+                }
+                catch { }
+            }
         }
 
         public void ResetZoom()
@@ -102,6 +111,13 @@ namespace ScanTool.Services
                 int boxW = _picBox.ClientSize.Width;
                 int boxH = _picBox.ClientSize.Height;
 
+                // 如果 PictureBox 尺寸为 0，直接设置原始图
+                if (boxW == 0 || boxH == 0)
+                {
+                    _picBox.Image = new Bitmap(_originalImage);
+                    return;
+                }
+
                 var bmp = new Bitmap(boxW, boxH);
                 using (var g = Graphics.FromImage(bmp))
                 {
@@ -114,10 +130,21 @@ namespace ScanTool.Services
                 var old = _picBox.Image;
                 _picBox.Image = bmp;
                 old?.Dispose();
-            }
-            catch { }
-        }
 
+                // 强制刷新
+                _picBox.Invalidate();
+                _picBox.Update();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[ImageEditor.ApplyZoom] 错误: {ex.Message}");
+                try
+                {
+                    _picBox.Image = new Bitmap(_originalImage);
+                }
+                catch { }
+            }
+        }
         public void SetImage(Image img)
         {
             if (img == null)
@@ -132,10 +159,19 @@ namespace ScanTool.Services
             _zoomFactor = 1.0f;
             _panOffset = Point.Empty;
 
-            if (_picBox.IsHandleCreated && _picBox.ClientSize.Width > 0)
+            // 移除条件判断，直接设置图片并强制刷新
+            if (_picBox.IsHandleCreated && _picBox.ClientSize.Width > 0 && _picBox.ClientSize.Height > 0)
+            {
                 FitToScreen();
+            }
             else
+            {
                 _picBox.Image = new Bitmap(_originalImage);
+            }
+
+            // 强制刷新 PictureBox
+            _picBox.Invalidate();
+            _picBox.Update();
         }
 
         // ==================== 平移 ====================
@@ -183,6 +219,7 @@ namespace ScanTool.Services
             _picBox.MouseMove += OnCropMouseMove;
             _picBox.MouseUp += OnCropMouseUp;
             _picBox.Paint += OnCropPaint;
+            _onStatusChanged?.Invoke("裁剪模式: 拖动选择区域 | 双击确认 | Esc取消");
         }
 
         private void OnCropMouseDown(object sender, MouseEventArgs e) { _cropStart = e.Location; }
@@ -192,6 +229,7 @@ namespace ScanTool.Services
             {
                 _cropRect = new Rectangle(Math.Min(_cropStart.X, e.X), Math.Min(_cropStart.Y, e.Y),
                     Math.Abs(e.X - _cropStart.X), Math.Abs(e.Y - _cropStart.Y));
+                _onStatusChanged?.Invoke($"裁剪模式: {_cropRect.Width}×{_cropRect.Height} | 双击确认 | Esc取消");
                 _picBox.Invalidate();
             }
         }
@@ -236,6 +274,7 @@ namespace ScanTool.Services
             _picBox.MouseMove += OnDeskewMouseMove;
             _picBox.MouseUp += OnDeskewMouseUp;
             _picBox.Paint += OnDeskewPaint;
+            _onStatusChanged?.Invoke("手动纠偏: 沿一排文字或表格线，从左到右画一条对齐线");
         }
 
         private void OnDeskewMouseDown(object sender, MouseEventArgs e)
@@ -249,6 +288,10 @@ namespace ScanTool.Services
             if (_isDeskewing && e.Button == MouseButtons.Left)
             {
                 _deskewEnd = e.Location;
+                double dx = _deskewEnd.X - _deskewStart.X;
+                double dy = _deskewEnd.Y - _deskewStart.Y;
+                double angle = Math.Atan2(dy, dx) * 180 / Math.PI;
+                _onStatusChanged?.Invoke($"手动纠偏: 当前角度 {angle:F1}° | 松开确认");
                 _picBox.Invalidate();
             }
         }
@@ -264,7 +307,6 @@ namespace ScanTool.Services
 
         private void OnDeskewMouseUp(object sender, MouseEventArgs e)
         {
-            // 转换到图像坐标再计算角度
             var imgStart = ScreenToImage(_deskewStart);
             var imgEnd = ScreenToImage(_deskewEnd);
 
@@ -273,14 +315,11 @@ namespace ScanTool.Services
 
             if (Math.Abs(dx) < 5 && Math.Abs(dy) < 5)
             {
-                // 线太短，忽略
                 StopDeskew();
                 return;
             }
 
-            // 计算角度：线的角度，需要纠正到水平
             double angle = Math.Atan2(dy, dx) * 180 / Math.PI;
-            // 纸张边缘应该是水平的，所以纠正角 = -angle
             _onDeskewComplete?.Invoke(angle);
             StopDeskew();
         }
@@ -295,41 +334,6 @@ namespace ScanTool.Services
             _picBox.Paint -= OnDeskewPaint;
             _picBox.Invalidate();
         }
-
-        // ==================== 擦除 ====================
-
-        public void StartErase(int size = 20)
-        {
-            _eraserSize = size;
-            _isErasing = true;
-            _picBox.MouseDown += OnEraseMouseDown;
-            _picBox.MouseMove += OnEraseMouseMove;
-            _picBox.MouseUp += OnEraseMouseUp;
-        }
-
-        private void OnEraseMouseDown(object sender, MouseEventArgs e) { EraseAt(e.Location); }
-        private void OnEraseMouseMove(object sender, MouseEventArgs e)
-        { if (_isErasing && e.Button == MouseButtons.Left) EraseAt(e.Location); }
-        private void OnEraseMouseUp(object sender, MouseEventArgs e) { StopErase(); EraseCompleted?.Invoke(); }
-
-        private void EraseAt(Point location)
-        {
-            if (_picBox.Image == null) return;
-            using var g = Graphics.FromImage(_picBox.Image);
-            g.CompositingMode = CompositingMode.SourceCopy;
-            using var brush = new SolidBrush(Color.White);
-            g.FillEllipse(brush, location.X - _eraserSize / 2, location.Y - _eraserSize / 2, _eraserSize, _eraserSize);
-            _picBox.Invalidate();
-        }
-
-        public void StopErase()
-        {
-            _isErasing = false;
-            _picBox.MouseDown -= OnEraseMouseDown;
-            _picBox.MouseMove -= OnEraseMouseMove;
-            _picBox.MouseUp -= OnEraseMouseUp;
-        }
-        public event Action EraseCompleted;
 
         // ==================== 坐标转换 ====================
 

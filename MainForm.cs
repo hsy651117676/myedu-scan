@@ -79,7 +79,7 @@ namespace ScanTool
                         _scanControl.SetPerson(_currentRsid, _currentPersonName);
                 }
             }
-
+            _scanControl?.RefreshPresetList();
             SaveConfig(serverUrl, scanDir, viewerPath);
         }
         public void RefreshScanPresets()

@@ -45,9 +45,9 @@
             AutoDeskew = true,
             Denoise = true,
             Brightness = true,
-            BrightnessValue = 10,
+            BrightnessValue = 20,
             Contrast = true,
-            ContrastValue = 1.1
+            ContrastValue = 1.2
         };
 
         public static RepairProfile Deep => new RepairProfile
@@ -58,7 +58,7 @@
             Brightness = true,
             BrightnessValue = 20,
             Contrast = true,
-            ContrastValue = 1.2
+            ContrastValue = 1.44
         };
     }
 }
