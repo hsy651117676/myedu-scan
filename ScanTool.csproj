@@ -172,6 +172,7 @@
     </Compile>
     <Compile Include="Controls\ShortcutManager.cs" />
     <Compile Include="Helpers\FormatHelper.cs" />
+    <Compile Include="Helpers\ImageSaveHelper.cs" />
     <Compile Include="Helpers\Md5Helper.cs" />
     <Compile Include="Helpers\NaturalStringComparer.cs" />
     <Compile Include="LoginForm.cs">

@@ -2,10 +2,12 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using ScanTool.Helpers;
 using ScanTool.Models;
 using ScanTool.Services;
 
@@ -459,7 +461,20 @@ namespace ScanTool.Controls
         private void CollectFlNodes(TreeNode parent, List<TreeNode> result)
         {
             if (parent.Tag is NodeTag t && t.Fl != null && t.Fl != "0" && t.Archid == null)
-                result.Add(parent);
+            {
+                // 只收集有子材料节点的分类（排除 4-1、4-2、9-1 等子分类容器）
+                bool hasMaterialChild = false;
+                foreach (TreeNode child in parent.Nodes)
+                {
+                    if (child.Tag is NodeTag ct && ct.Archid != null)
+                    {
+                        hasMaterialChild = true;
+                        break;
+                    }
+                }
+                if (hasMaterialChild)
+                    result.Add(parent);
+            }
 
             foreach (TreeNode child in parent.Nodes)
                 CollectFlNodes(child, result);
@@ -562,8 +577,9 @@ namespace ScanTool.Controls
                     // 保存到磁盘
                     using (var saveBmp = new Bitmap(finalBmp))
                     {
-                        saveBmp.Save(path, System.Drawing.Imaging.ImageFormat.Jpeg);
+                        ImageSaveHelper.SaveJpeg(saveBmp, path);
                     }
+
 
                     setEditingFile(path);
 

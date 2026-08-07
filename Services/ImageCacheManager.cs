@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Drawing.Imaging;
 using ScanTool.Helpers;
+using ScanTool.Helpers;
 
 namespace ScanTool.Services
 {
@@ -26,7 +27,7 @@ namespace ScanTool.Services
         {
             if (string.IsNullOrEmpty(filePath) || image == null) return;
             var tmpPath = filePath + ".tmp";
-            image.Save(tmpPath, ImageFormat.Jpeg);
+            ImageSaveHelper.SaveJpeg(image, tmpPath);
             _dirtyFlags[filePath] = true;
         }
 

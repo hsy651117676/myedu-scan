@@ -1,5 +1,6 @@
 ﻿// Services/EraseController.cs
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -18,6 +19,12 @@ namespace ScanTool.Services
         private bool _drawing;
         private bool _hasDrawn;
 
+        // 新增：记录擦除点（原图坐标）和视口参数
+        private readonly List<Point> _erasePoints = new List<Point>();
+        private Image _originalImage;
+        private float _zoomFactor = 1.0f;
+        private Point _panOffset = Point.Empty;
+
         public bool IsActive => _isActive;
         public int EraserSize => UserSettings.Get<int>("EraserSize");
         public EraserShape Shape => UserSettings.Get<string>("EraserShape") == "Rectangle" ? EraserShape.Rectangle : EraserShape.Circle;
@@ -27,6 +34,25 @@ namespace ScanTool.Services
         {
             _picBox = picBox;
             _onStatusChanged = onStatusChanged;
+        }
+
+        public void SetViewportParams(Image originalImage, float zoomFactor, Point panOffset)
+        {
+            _originalImage = originalImage;
+            _zoomFactor = zoomFactor;
+            _panOffset = panOffset;
+        }
+
+        private Point ScreenToImage(Point screenPt)
+        {
+            if (_originalImage == null) return screenPt;
+            int imgW = (int)(_originalImage.Width * _zoomFactor);
+            int imgH = (int)(_originalImage.Height * _zoomFactor);
+            int offsetX = (_picBox.ClientSize.Width - imgW) / 2 + _panOffset.X;
+            int offsetY = (_picBox.ClientSize.Height - imgH) / 2 + _panOffset.Y;
+            return new Point(
+                (int)((screenPt.X - offsetX) / _zoomFactor),
+                (int)((screenPt.Y - offsetY) / _zoomFactor));
         }
 
         private void NotifyStatus()
@@ -41,6 +67,7 @@ namespace ScanTool.Services
             _isActive = true;
             _drawing = false;
             _hasDrawn = false;
+            _erasePoints.Clear();
             _snapshot?.Dispose();
             _snapshot = _picBox.Image != null ? new Bitmap(_picBox.Image) : null;
             UpdateCursor();
@@ -116,6 +143,12 @@ namespace ScanTool.Services
         {
             if (_picBox.Image == null) return;
             _hasDrawn = true;
+
+            // 记录原图坐标
+            var imgPt = ScreenToImage(pt);
+            _erasePoints.Add(imgPt);
+
+            // 在画布上绘制（视觉反馈）
             using var g = Graphics.FromImage(_picBox.Image);
             g.CompositingMode = CompositingMode.SourceCopy;
             using var brush = new SolidBrush(Color.White);
@@ -142,6 +175,31 @@ namespace ScanTool.Services
             _picBox.MouseUp -= OnMouseUp;
             _picBox.MouseEnter -= OnMouseEnter;
             return _snapshot;
+        }
+
+        /// <summary>
+        /// 在原图上应用擦除
+        /// </summary>
+        public Bitmap ApplyToOriginal(Bitmap original)
+        {
+            if (!_hasDrawn || original == null || _erasePoints.Count == 0)
+                return new Bitmap(original);
+
+            var result = new Bitmap(original);
+            using (var g = Graphics.FromImage(result))
+            {
+                g.CompositingMode = CompositingMode.SourceCopy;
+                using var brush = new SolidBrush(Color.White);
+                int half = EraserSize / 2;
+                foreach (var pt in _erasePoints)
+                {
+                    if (Shape == EraserShape.Circle)
+                        g.FillEllipse(brush, pt.X - half, pt.Y - half, EraserSize, EraserSize);
+                    else
+                        g.FillRectangle(brush, pt.X - half, pt.Y - half, EraserSize, EraserSize);
+                }
+            }
+            return result;
         }
     }
 }

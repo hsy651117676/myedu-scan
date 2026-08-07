@@ -27,7 +27,8 @@ namespace ScanTool.Services
 
         private bool _isPanning;
         private Point _panStart;
-
+        public float ZoomFactor => _zoomFactor;
+        public Point PanOffset => _panOffset;
         public ImageEditor(PictureBox picBox, Action<string> onStatusChanged = null)
         {
             _picBox = picBox;
@@ -121,7 +122,7 @@ namespace ScanTool.Services
                 var bmp = new Bitmap(boxW, boxH);
                 using (var g = Graphics.FromImage(bmp))
                 {
-                    g.Clear(Color.FromArgb(245, 245, 245));
+                    g.Clear(Color.White);
                     g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                     int x = (boxW - imgW) / 2 + _panOffset.X;
                     int y = (boxH - imgH) / 2 + _panOffset.Y;

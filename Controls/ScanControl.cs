@@ -435,8 +435,9 @@ namespace ScanTool.Controls
                 // 保存到磁盘
                 using (var saveBmp = new Bitmap(finalBmp))
                 {
-                    saveBmp.Save(path, ImageFormat.Jpeg);
+                    ImageSaveHelper.SaveJpeg(saveBmp, path);
                 }
+               
 
                 _currentEditingFile = path;
 
@@ -564,11 +565,12 @@ namespace ScanTool.Controls
             if (!_eraseController.IsActive) return;
             var snapshot = _eraseController.Stop();
             _viewport.EnableDrag = true;
-            if (_eraseController.HasDrawn && snapshot != null && picPreview.Image != null)
+            if (_eraseController.HasDrawn && _processor.CurrentBitmap != null)
             {
-                var result = new Bitmap(picPreview.Image);
+                var result = _eraseController.ApplyToOriginal(_processor.CurrentBitmap);
                 _processor.ReplaceImage(result);
                 _imageCache.MarkDirty(_currentEditingFile);
+                _editor.SetImage(result);
                 _viewport.SetOriginalImage(result);
                 _viewport.FitToScreen();
                 result.Dispose();
@@ -664,6 +666,7 @@ namespace ScanTool.Controls
                     else
                     {
                         _viewport.EnableDrag = false;
+                        _eraseController.SetViewportParams(_processor.CurrentBitmap, _editor.ZoomFactor, _editor.PanOffset);
                         _eraseController.Start();
                     }
                     break;
