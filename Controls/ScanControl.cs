@@ -14,6 +14,7 @@ using ScanTool.Models;
 using ScanTool.Services;
 using Point = System.Drawing.Point;
 using Size = System.Drawing.Size;
+using System.Diagnostics;
 
 namespace ScanTool.Controls
 {
@@ -72,21 +73,61 @@ namespace ScanTool.Controls
         {
             _scanService = scanService;
             InitializeComponent();
-            _contextMenu = new ScanContextMenu(this, ConfirmForce);
+
+            // 先初始化基础服务
+            _imageCache = new ImageCacheManager();
             _processor = new ImageProcessor();
             _editor = new ImageEditor(picPreview, status => lblStatus.Text = status);
-            _listManager = new ScanListManager(dgvFiles);
-            _toolbar = new ScanToolbar(panelTools, OnToolAction);
-            _imageCache = new ImageCacheManager();
             _viewport = new ViewportController(picPreview);
             _eraseController = new EraseController(picPreview, status => lblStatus.Text = status);
             _pdfExporter = new PdfExporter();
             _fileStatusManager = new FileStatusManager();
 
+            // 再初始化依赖它们的对象
+            _contextMenu = new ScanContextMenu(this, ConfirmForce);
+            _listManager = new ScanListManager(dgvFiles, lvThumbnails, panelFileList);
+            _listManager.SetImageCache(_imageCache);  // 现在 _imageCache 已经初始化
+
+            _listManager.PrevMaterialRequested += () =>
+            {
+                var prevNode = FindPrevMaterialNode(tvMaterials.SelectedNode);
+                if (prevNode != null)
+                {
+                    tvMaterials.SelectedNode = prevNode;
+                    tvMaterials_AfterSelect(null, new TreeViewEventArgs(prevNode));
+                    if (_listManager.Count > 0) _listManager.SelectPage(_listManager.Count - 1);
+                }
+            };
+
+            _toolbar = new ScanToolbar(panelTools, OnToolAction);
+
+            this.cmbSplitMode.Items.Clear();
+            this.cmbSplitMode.Items.AddRange(new object[] {
+    "左右拆分（左1右2）",
+    "左右拆分（右1左2）",
+    "上下拆分（上1下2）",
+    "上下拆分（下1上2）"
+});
+            this.cmbRotation.Items.Clear();
+            this.cmbRotation.Items.AddRange(new object[] {
+    "不旋转",
+    "顺时针90°",
+    "逆时针90°",
+    "180°"
+});
+            this.cmbRotation.SelectedIndex = 0;
+            this.cmbSplitMode.SelectedIndex = 0;
+            this.cmbSplitMode.Enabled = false;
+
+            this.chkSplitScan.CheckedChanged += (s, e) =>
+            {
+                this.cmbSplitMode.Enabled = this.chkSplitScan.Checked;
+            };
+
             _listManager.SelectedIndexChanged += OnPageSelected;
             this.cmbPreset.SelectedIndexChanged += cmbPreset_SelectedIndexChanged;
             this.cmbScanner.DropDown += (s, e) => LoadScanners(true);
-           
+
             lblLocalPath.Click += (s, e) =>
             {
                 if (Directory.Exists(lblLocalPath.Text))
@@ -137,7 +178,6 @@ namespace ScanTool.Controls
                 }
             };
         }
-
         public void SetViewerPath(string path) => _viewerPath = path;
 
         public bool ConfirmForce()
@@ -188,13 +228,18 @@ namespace ScanTool.Controls
 
         public async void SetPerson(string rsid, string name)
         {
-            _currentRsid = rsid; _currentPersonName = name;
+            _currentRsid = rsid;
+            _currentPersonName = name;
             lblPersonInfo.Text = $"正在加载 {name}...";
             _currentFileList = new List<FileStatusInfo>();
             _listManager.SetFiles(_currentFileList);
-            _scanCounter = 0; _maxPages = 0;
-            _imageCache.ReleaseAll(); _currentEditingFile = null;
-            _editor.SetImage(null); _viewport.SetOriginalImage(null); _processor.Clear();
+            _scanCounter = 0;
+            _maxPages = 0;
+            _imageCache.ReleaseAll();
+            _currentEditingFile = null;
+            _editor.SetImage(null);
+            _viewport.SetOriginalImage(null);
+            _processor.Clear();
 
             try
             {
@@ -227,12 +272,15 @@ namespace ScanTool.Controls
                     }
                 }
 
+                // 删除了 CleanupAllTmpFiles(rsid) 调用
+
                 UpdateStats();
                 tvMaterials.ExpandAll();
             }
             catch (UnauthorizedAccessException) { lblStatus.Text = "没有权限访问该人员档案"; }
             catch (Exception ex) { lblStatus.Text = $"加载失败: {ex.Message}"; }
         }
+       
 
         // ==================== 预设 + 修复模式 ====================
 
@@ -388,12 +436,136 @@ namespace ScanTool.Controls
                     MessageBox.Show("扫描失败，请检查扫描仪是否连接并开启。", "扫描错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-                SaveScanResult(bmp);
+
+                // ---- 拆分扫描 ----
+                if (chkSplitScan.Checked)
+                {
+                    var pages = SplitImage(bmp, GetSplitModeKey(cmbSplitMode.SelectedIndex));
+                    bmp.Dispose();
+
+                    int rotation = GetRotationAngle();  // ← 新增
+
+                    foreach (var page in pages)
+                    {
+                        if (_maxPages > 0 && _scanCounter >= _maxPages)
+                        {
+                            lblStatus.Text = "已达材料页数上限，剩余拆分页未保存";
+                            page.Dispose();
+                            break;
+                        }
+
+                        // ← 新增：应用旋转
+                        Bitmap rotatedPage = ApplyRotation(page, rotation);
+                        SaveScanResult(rotatedPage);
+                        rotatedPage.Dispose();
+                    }
+                }
+                else
+                {
+                    SaveScanResult(bmp);
+                }
+                // ---- 拆分扫描结束 ----
             }
             catch (Exception ex) { lblStatus.Text = $"扫描失败: {ex.Message}"; }
         }
+        private int GetRotationAngle()
+        {
+            switch (cmbRotation.SelectedIndex)
+            {
+                case 1: return 90;   // 顺时针
+                case 2: return -90;  // 逆时针
+                case 3: return 180;  // 180°
+                default: return 0;
+            }
+        }
 
+        private Bitmap ApplyRotation(Bitmap source, int angle)
+        {
+            if (angle == 0) return source;
 
+            Bitmap result;
+            if (angle == 180)
+            {
+                result = new Bitmap(source.Width, source.Height);
+                using (var g = Graphics.FromImage(result))
+                {
+                    g.TranslateTransform(result.Width, result.Height);
+                    g.RotateTransform(180);
+                    g.DrawImage(source, 0, 0);
+                }
+            }
+            else
+            {
+                result = new Bitmap(source.Height, source.Width);
+                using (var g = Graphics.FromImage(result))
+                {
+                    if (angle == 90)
+                    {
+                        g.TranslateTransform(result.Width, 0);
+                        g.RotateTransform(90);
+                    }
+                    else if (angle == -90)
+                    {
+                        g.TranslateTransform(0, result.Height);
+                        g.RotateTransform(-90);
+                    }
+                    g.DrawImage(source, 0, 0);
+                }
+            }
+            source.Dispose();
+            return result;
+        }
+        private string GetSplitModeKey(int index)
+        {
+            switch (index)
+            {
+                case 0: return "LR12";
+                case 1: return "RL21";
+                case 2: return "TB12";
+                case 3: return "BT21";
+                default: return "LR12";
+            }
+        }
+
+        private List<Bitmap> SplitImage(Bitmap source, string mode)
+        {
+            Bitmap src24 = source.PixelFormat == System.Drawing.Imaging.PixelFormat.Format24bppRgb
+                ? source
+                : source.Clone(new Rectangle(0, 0, source.Width, source.Height),
+                               System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+
+            int halfW = src24.Width / 2;
+            int halfH = src24.Height / 2;
+            var result = new List<Bitmap>();
+
+            Rectangle leftRect = new Rectangle(0, 0, halfW, src24.Height);
+            Rectangle rightRect = new Rectangle(halfW, 0, src24.Width - halfW, src24.Height);
+            Rectangle topRect = new Rectangle(0, 0, src24.Width, halfH);
+            Rectangle bottomRect = new Rectangle(0, halfH, src24.Width, src24.Height - halfH);
+
+            switch (mode)
+            {
+                case "LR12":
+                    result.Add(src24.Clone(leftRect, src24.PixelFormat));
+                    result.Add(src24.Clone(rightRect, src24.PixelFormat));
+                    break;
+                case "RL21":
+                    result.Add(src24.Clone(rightRect, src24.PixelFormat));
+                    result.Add(src24.Clone(leftRect, src24.PixelFormat));
+                    break;
+                case "TB12":
+                    result.Add(src24.Clone(topRect, src24.PixelFormat));
+                    result.Add(src24.Clone(bottomRect, src24.PixelFormat));
+                    break;
+                case "BT21":
+                    result.Add(src24.Clone(bottomRect, src24.PixelFormat));
+                    result.Add(src24.Clone(topRect, src24.PixelFormat));
+                    break;
+            }
+
+            if (src24 != source) src24.Dispose();
+            return result;
+        }
         private void SaveScanResult(Bitmap bmp)
         {
             if (_currentArchid == 0) { MessageBox.Show("请先选择材料目录"); bmp.Dispose(); return; }
@@ -437,14 +609,17 @@ namespace ScanTool.Controls
                 {
                     ImageSaveHelper.SaveJpeg(saveBmp, path);
                 }
-               
+
+                // 更新缓存状态
+                _imageCache.UpdateMd5(path);  // 更新MD5
+                _imageCache.Release(path);    // 清除可能的脏标记
 
                 _currentEditingFile = path;
 
-                // 直接显示内存中的修复结果，不从磁盘重新加载
                 _processor.LoadImage(finalBmp);
-                _editor.SetImage(finalBmp);
-                _viewport.SetOriginalImage(finalBmp);
+                var processed = _processor.CurrentBitmap;
+                _editor.SetImage(processed);
+                _viewport.SetOriginalImage(processed);
                 _viewport.FitToScreen();
 
                 LoadExistingFiles();
@@ -455,8 +630,6 @@ namespace ScanTool.Controls
             }
             finally
             {
-                // 注意：finalBmp 已经被 processor/editor/viewport 持有引用，不能在此 Dispose
-                // 这些对象会在下次 SetImage 或自身 Dispose 时释放旧图像
             }
         }
         // ==================== 文件列表 ====================
@@ -465,13 +638,13 @@ namespace ScanTool.Controls
         {
             string localDir = Path.Combine(_scanDir, _currentRsid.PadLeft(8, '0'), _currentFl.ToString(), _currentArchid.ToString());
             lblLocalPath.Text = localDir;
+
             _currentFileList = _fileStatusManager.BuildFileList(localDir, _maxPages, _allScans, _currentArchid.ToString(), _imageCache);
             _listManager.SetFiles(_currentFileList);
             _scanCounter = _currentFileList.Count(f => f.LocalPath != null);
         }
-
         // ==================== 树操作 ====================
-
+       
         private void tvMaterials_AfterSelect(object sender, TreeViewEventArgs e)
         {
             if (e.Node?.Tag is NodeTag tag && tag.Archid != null)
@@ -507,7 +680,29 @@ namespace ScanTool.Controls
             if (current.Parent?.Parent?.Parent != null) { int gi = current.Parent.Parent.Parent.Nodes.IndexOf(current.Parent.Parent); if (gi < current.Parent.Parent.Parent.Nodes.Count - 1) return FindFirstMaterialNode(current.Parent.Parent.Parent.Nodes[gi + 1]); }
             return null;
         }
+        private TreeNode FindPrevMaterialNode(TreeNode current)
+        {
+            if (current?.Parent == null) return null;
+            int idx = current.Parent.Nodes.IndexOf(current);
+            if (idx > 0) return current.Parent.Nodes[idx - 1];
 
+            if (current.Parent.Parent == null) return null;
+            int flIdx = current.Parent.Parent.Nodes.IndexOf(current.Parent);
+            if (flIdx <= 0) return null;
+
+            return FindLastMaterialNode(current.Parent.Parent.Nodes[flIdx - 1]);
+        }
+
+        private TreeNode FindLastMaterialNode(TreeNode node)
+        {
+            for (int i = node.Nodes.Count - 1; i >= 0; i--)
+            {
+                if (node.Nodes[i].Tag is NodeTag t && t.Archid != null) return node.Nodes[i];
+                var found = FindLastMaterialNode(node.Nodes[i]);
+                if (found != null) return found;
+            }
+            return null;
+        }
         private TreeNode FindFirstMaterialNode(TreeNode parent) { foreach (TreeNode c in parent.Nodes) { if (c.Tag is NodeTag t && t.Archid != null) return c; var f = FindFirstMaterialNode(c); if (f != null) return f; } return null; }
         private TreeNode FindMaterialNode(string archid) { foreach (TreeNode n in tvMaterials.Nodes) { var f = FindInNode(n, archid); if (f != null) return f; } return null; }
         private TreeNode FindInNode(TreeNode p, string archid) { if (p.Tag is NodeTag t && t.Archid == archid) return p; foreach (TreeNode c in p.Nodes) { var f = FindInNode(c, archid); if (f != null) return f; } return null; }
@@ -537,8 +732,9 @@ namespace ScanTool.Controls
             if (bmp != null)
             {
                 _processor.LoadImage(bmp);
-                _editor.SetImage(bmp);
-                _viewport.SetOriginalImage(bmp);
+                var processed = _processor.CurrentBitmap;  // ← 300 DPI
+                _editor.SetImage(processed);
+                _viewport.SetOriginalImage(processed);
                 _viewport.FitToScreen();
                 bmp.Dispose();
             }
@@ -548,8 +744,9 @@ namespace ScanTool.Controls
                 {
                     var diskBmp = new Bitmap(fs);
                     _processor.LoadImage(diskBmp);
-                    _editor.SetImage(diskBmp);
-                    _viewport.SetOriginalImage(diskBmp);
+                    var processed = _processor.CurrentBitmap;  // ← 300 DPI
+                    _editor.SetImage(processed);
+                    _viewport.SetOriginalImage(processed);
                     _viewport.FitToScreen();
                     diskBmp.Dispose();
                 }
@@ -558,31 +755,62 @@ namespace ScanTool.Controls
             _lastSelectedIndex = index;
         }
 
-        private void SaveCurrentToCache() { if (string.IsNullOrEmpty(_currentEditingFile) || _processor.CurrentBitmap == null || !_imageCache.IsDirty(_currentEditingFile)) return; _imageCache.Store(_currentEditingFile, _processor.CurrentBitmap); }
+        private void SaveCurrentToCache()
+        {
+            // 如果擦除模式激活且未应用，先应用
+            if (_eraseController.IsActive && _eraseController.HasDrawn)
+            {
+                ExitEraseIfActive();
+            }
 
+            if (string.IsNullOrEmpty(_currentEditingFile) || _processor.CurrentBitmap == null)
+                return;
+
+            // 只有当前文件已被标记为脏（用户修改过）时才保存到缓存
+            if (_imageCache.IsDirty(_currentEditingFile))
+            {
+                _imageCache.Store(_currentEditingFile, _processor.CurrentBitmap);
+            }
+        }
         private void ExitEraseIfActive()
         {
             if (!_eraseController.IsActive) return;
+
             var snapshot = _eraseController.Stop();
             _viewport.EnableDrag = true;
+
             if (_eraseController.HasDrawn && _processor.CurrentBitmap != null)
             {
+                _eraseController.SetViewportParams(
+                    _processor.CurrentBitmap,
+                    _viewport.ZoomFactor,
+                    _viewport.PanOffset);
+
                 var result = _eraseController.ApplyToOriginal(_processor.CurrentBitmap);
                 _processor.ReplaceImage(result);
-                _imageCache.MarkDirty(_currentEditingFile);
-                _editor.SetImage(result);
-                _viewport.SetOriginalImage(result);
+
+                // 先 Store，再 Dispose
+                _imageCache.Store(_currentEditingFile, result);
+
+                // 刷新显示用 processor 的当前图，不用 result
+                var processed = _processor.CurrentBitmap;
+                _editor.SetImage(processed);
+                _viewport.SetOriginalImage(processed);
                 _viewport.FitToScreen();
+                Application.DoEvents();
+
                 result.Dispose();
             }
+
             snapshot?.Dispose();
         }
-
         // ==================== 工具动作路由 ====================
 
         public void OnToolAction(string action)
         {
             if (_currentArchid == 0 && action == "scan") { _ = ScanOnePage(); return; }
+            if (action != "crop" && action != "escape") _editor.StopCrop();
+            if (action != "manual_deskew" && action != "escape") _editor.StopDeskew();
             if (action != "erase" && action != "eraser_size_up" && action != "eraser_size_down") ExitEraseIfActive();
             var page = _listManager.GetFile(_listManager.SelectedIndex);
             if (page == null && action != "scan" && action != "batch_scan" && action != "save_all" &&
@@ -608,7 +836,7 @@ namespace ScanTool.Controls
                         })));
                     }); break;
                 case "replace_scan": ReplaceScan(); break;
-                case "clean_orphan_files": _ = _batchHandler.CleanOrphanFiles(_allScans, _maxPages, _currentRsid, _currentArchid.ToString(), RefreshLocalTree); break;
+                case "clean_orphan_files": _ = _batchHandler.CleanExtraPages(_allScans, _maxPages, _currentRsid, _currentArchid.ToString(), RefreshLocalTree); break;
 
                 // 上传下载
                 case "upload_item": if (_currentArchid == 0) { MessageBox.Show("请先选择材料目录"); break; } _ = _transferHandler.UploadItem(_currentRsid, _currentFl, _currentArchid).ContinueWith(_ => this.BeginInvoke(new Action(() => AfterTransfer()))); break;
@@ -628,14 +856,46 @@ namespace ScanTool.Controls
                 case "scan": _ = ScanOnePage(); break;
 
                 // 视口
-                case "zoom_in": _viewport.ZoomIn(); break;
-                case "zoom_out": _viewport.ZoomOut(); break;
-                case "fit_screen": _viewport.FitToScreen(); break;
-                case "reset_zoom": _viewport.ResetZoom(); break;
-                case "pan_up": _viewport.PanUp(); break;
-                case "pan_down": _viewport.PanDown(); break;
-                case "pan_left": _viewport.PanLeft(); break;
-                case "pan_right": _viewport.PanRight(); break;
+                case "zoom_in":
+                    _viewport.ZoomIn();
+                    if (_eraseController.IsActive)
+                        _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+                    break;
+                case "zoom_out":
+                    _viewport.ZoomOut();
+                    if (_eraseController.IsActive)
+                        _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+                    break;
+                case "fit_screen":
+                    _viewport.FitToScreen();
+                    if (_eraseController.IsActive)
+                        _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+                    break;
+                case "reset_zoom":
+                    _viewport.ResetZoom();
+                    if (_eraseController.IsActive)
+                        _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+                    break;
+                case "pan_up":
+                    _viewport.PanUp();
+                    if (_eraseController.IsActive)
+                        _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+                    break;
+                case "pan_down":
+                    _viewport.PanDown();
+                    if (_eraseController.IsActive)
+                        _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+                    break;
+                case "pan_left":
+                    _viewport.PanLeft();
+                    if (_eraseController.IsActive)
+                        _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+                    break;
+                case "pan_right":
+                    _viewport.PanRight();
+                    if (_eraseController.IsActive)
+                        _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+                    break;
 
                 // 图像处理
                 case "rotate_left": Process(_processor.RotateLeft); break;
@@ -666,7 +926,14 @@ namespace ScanTool.Controls
                     else
                     {
                         _viewport.EnableDrag = false;
-                        _eraseController.SetViewportParams(_processor.CurrentBitmap, _editor.ZoomFactor, _editor.PanOffset);
+
+                        // 添加调试日志
+                        var bmp = _processor.CurrentBitmap;
+                        Debug.WriteLine($"[Erase] CurrentBitmap尺寸={bmp.Width}x{bmp.Height}, DPI={bmp.HorizontalResolution}x{bmp.VerticalResolution}");
+                        Debug.WriteLine($"[Erase] ZoomFactor={_viewport.ZoomFactor}, PanOffset={_viewport.PanOffset}");
+                        Debug.WriteLine($"[Erase] picPreview.Image尺寸={picPreview.Image?.Width}x{picPreview.Image?.Height}");
+
+                        _eraseController.SetViewportParams(bmp, _viewport.ZoomFactor, _viewport.PanOffset);
                         _eraseController.Start();
                     }
                     break;
@@ -677,7 +944,6 @@ namespace ScanTool.Controls
                 case "restore":
                     if (!string.IsNullOrEmpty(_currentEditingFile) && File.Exists(_currentEditingFile))
                     {
-                        
                         using (var fs = new FileStream(_currentEditingFile, FileMode.Open, FileAccess.Read))
                         {
                             var db = new Bitmap(fs);
@@ -687,9 +953,15 @@ namespace ScanTool.Controls
                             _viewport.FitToScreen();
                         }
                         _imageCache.Release(_currentEditingFile);
-                        LoadExistingFiles();
-                        var restIdx = _currentFileList.FindIndex(f => f.LocalPath == _currentEditingFile);
-                        if (restIdx >= 0) _listManager.SelectPage(restIdx);
+
+                        // 只刷新当前文件状态，不重新加载整个列表
+                        var currentIdx = _listManager.SelectedIndex;
+                        if (currentIdx >= 0)
+                        {
+                            _listManager.RefreshFileStatus(currentIdx, _imageCache, _currentEditingFile);
+                        }
+
+                        UpdateCurrentNodeStatus();
                         lblStatus.Text = "已恢复原始图像";
                     }
                     else
@@ -700,8 +972,36 @@ namespace ScanTool.Controls
                     break;
 
                 // 保存
-                case "save": SaveCurrentToCache(); _imageCache.Save(_currentEditingFile); _imageCache.UpdateMd5(_currentEditingFile); LoadExistingFiles(); var savedIdx = _currentFileList.FindIndex(f => f.Filename == page?.Filename); if (savedIdx >= 0) _listManager.SelectPage(savedIdx); UpdateCurrentNodeStatus(); lblStatus.Text = $"已保存: {page?.Filename}"; break;
-                case "save_all": SaveCurrentToCache(); _imageCache.SaveAll(); _processor.Clear(); _editor.SetImage(null); _viewport.SetOriginalImage(null); _currentEditingFile = null; LoadExistingFiles(); UpdateCurrentNodeStatus(); lblStatus.Text = "全部已保存"; break;
+                case "save":
+                    // 先保存当前编辑到缓存（如果用户做了修改）
+                    SaveCurrentToCache();
+
+                    // 保存到磁盘
+                    _imageCache.Save(_currentEditingFile);
+                    _imageCache.UpdateMd5(_currentEditingFile);
+
+                    // 重新加载列表，更新状态
+                    LoadExistingFiles();
+
+                    // 恢复选中
+                    var saveIdx = _currentFileList.FindIndex(f => f.Filename == page?.Filename);
+                    if (saveIdx >= 0) _listManager.SelectPage(saveIdx);
+
+                    UpdateCurrentNodeStatus();
+                    lblStatus.Text = $"已保存: {page?.Filename}";
+                    break;
+                case "save_all":
+                    SaveCurrentToCache();  // 确保当前编辑被缓存
+                    _imageCache.SaveAll();  // 保存所有脏文件
+
+                    _processor.Clear();
+                    _editor.SetImage(null);
+                    _viewport.SetOriginalImage(null);
+                    _currentEditingFile = null;
+                    LoadExistingFiles();
+                    RefreshLocalTree();
+                    lblStatus.Text = "全部已保存";
+                    break;
                 case "save_selected": SaveSelectedFiles(); break;
                 case "restore_selected": RestoreSelectedFiles(); break;
                 case "upload_selected": UploadSelectedFiles(); break;
@@ -718,7 +1018,11 @@ namespace ScanTool.Controls
                     cn = System.Text.RegularExpressions.Regex.Replace(cn, @"[\\/:*?""<>|]", "");
                     _pdfExporter.ExportOrPrint(ed, cn, (pp) => this.BeginInvoke(new Action(() => lblStatus.Text = $"PDF已保存: {Path.GetFileName(pp)}")));
                     break;
-
+                case "toggle_view":
+                    _listManager.ToggleViewMode();
+                    lblStatus.Text = _listManager.ViewMode == ScanListViewMode.List ?
+                        "已切换到列表视图" : "已切换到缩略图视图";
+                    break;
                 case "prev_page": _listManager.PrevPage(); break;
                 case "next_page":
                     if (_listManager.Count == 0) break;
@@ -751,9 +1055,28 @@ namespace ScanTool.Controls
             _isProcessing = true;
             action();
             var b = _processor.CurrentBitmap;
-            _editor.SetImage(b); _viewport.SetOriginalImage(b); _viewport.FitToScreen();
+            _editor.SetImage(b);
+            _viewport.SetOriginalImage(b);
+            _viewport.FitToScreen();
+
+            // 如果擦除模式激活，同步更新视口参数
+            if (_eraseController.IsActive)
+            {
+                _eraseController.UpdateViewportParams(_viewport.ZoomFactor, _viewport.PanOffset);
+            }
+
             _isProcessing = false;
-            if (b != null) _imageCache.MarkDirty(_currentEditingFile);
+
+            if (b != null)
+            {
+                _imageCache.Store(_currentEditingFile, b);
+
+                var idx = _listManager.SelectedIndex;
+                if (idx >= 0)
+                {
+                    _listManager.RefreshFileStatus(idx, _imageCache, _currentEditingFile);
+                }
+            }
         }
 
         private void RefreshPreview() { _isProcessing = true; _editor.SetImage(_processor.CurrentBitmap); _viewport.SetOriginalImage(_processor.CurrentBitmap); _viewport.FitToScreen(); _isProcessing = false; }
@@ -798,12 +1121,25 @@ namespace ScanTool.Controls
         private void ApplyCrop(Rectangle rect)
         {
             if (rect.Width < 10 || rect.Height < 10) { _editor.StopCrop(); return; }
-            var b = _processor.CurrentBitmap; if (b == null) { _editor.StopCrop(); return; }
-            var m = b.ToMat(); int x = Math.Max(0, rect.X), y = Math.Max(0, rect.Y), w = Math.Min(rect.Width, m.Width - x), h = Math.Min(rect.Height, m.Height - y);
-            if (w <= 0 || h <= 0) { m.Dispose(); _editor.StopCrop(); return; }
-            var cr = new OpenCvSharp.Rect(x, y, w, h); var cropped = new Mat(m, cr); m.Dispose(); _processor.ReplaceImage(cropped.ToBitmap()); cropped.Dispose(); _editor.StopCrop();
-        }
+            var b = _processor.CurrentBitmap;
+            if (b == null) { _editor.StopCrop(); return; }
 
+            var m = b.ToMat();
+            int x = Math.Max(0, rect.X), y = Math.Max(0, rect.Y),
+                w = Math.Min(rect.Width, m.Width - x), h = Math.Min(rect.Height, m.Height - y);
+            if (w <= 0 || h <= 0) { m.Dispose(); b.Dispose(); _editor.StopCrop(); return; }
+
+            var cr = new OpenCvSharp.Rect(x, y, w, h);
+            var cropped = new Mat(m, cr);
+            var resultBmp = cropped.Clone().ToBitmap();  // ← Clone 独立数据
+            cropped.Dispose();
+            m.Dispose();
+            b.Dispose();
+
+            _processor.ReplaceImage(resultBmp);
+            resultBmp.Dispose();
+            _editor.StopCrop();
+        }
         // ==================== 文件右键菜单 ====================
 
         private void menuFileContext_Opening(object sender, System.ComponentModel.CancelEventArgs e)
@@ -832,8 +1168,44 @@ namespace ScanTool.Controls
 
         private void SaveSelectedFiles()
         {
-            foreach (var idx in _listManager.SelectedIndices) { var f = _listManager.GetFile(idx); if (f != null && f.IsDirty && f.LocalPath != null) _imageCache.Save(f.LocalPath); }
-            LoadExistingFiles(); UpdateCurrentNodeStatus(); lblStatus.Text = "选中文件已保存";
+            // 先保存当前编辑的文件到缓存
+            SaveCurrentToCache();
+
+            int savedCount = 0;
+            int skippedCount = 0;
+
+            foreach (var idx in _listManager.SelectedIndices)
+            {
+                var f = _listManager.GetFile(idx);
+                if (f == null || f.LocalPath == null)
+                {
+                    skippedCount++;
+                    continue;
+                }
+
+                // 检查是否有 .tmp 或脏标记
+                if (_imageCache.IsDirty(f.LocalPath))
+                {
+                    try
+                    {
+                        _imageCache.Save(f.LocalPath);
+                        savedCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        lblStatus.Text = $"保存失败: {f.Filename} - {ex.Message}";
+                        return;
+                    }
+                }
+                else
+                {
+                    skippedCount++;
+                }
+            }
+
+            LoadExistingFiles();
+            UpdateCurrentNodeStatus();
+            lblStatus.Text = $"已保存 {savedCount} 个文件" + (skippedCount > 0 ? $"，跳过 {skippedCount} 个" : "");
         }
 
         private void RestoreSelectedFiles()
@@ -942,7 +1314,7 @@ namespace ScanTool.Controls
                 if (tn != null) { tvMaterials.SelectedNode = tn; tvMaterials_AfterSelect(null, new TreeViewEventArgs(tn)); }
             })));
         });
-        public async Task CleanOrphanFiles() => await _batchHandler.CleanOrphanFiles(_allScans, _maxPages, _currentRsid, _currentArchid.ToString(), RefreshLocalTree);
+        public async Task CleanExtraPages() => await _batchHandler.CleanExtraPages(_allScans, _maxPages, _currentRsid, _currentArchid.ToString(), RefreshLocalTree);
 
         // ==================== 上传下载（公开给菜单调用） ====================
 

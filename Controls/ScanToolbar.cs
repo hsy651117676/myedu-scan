@@ -61,6 +61,7 @@ namespace ScanTool.Controls
             AddSection("文件操作", ref y);
             AddTwoButtons("💾 保存", "save", "💾 全存", "save_all", ref y);
             AddOneButton("📄 导出PDF", "export_pdf", ref y);
+            AddOneButton("🖼 切换视图", "toggle_view", ref y);
 
             // ==================== 批量操作 ====================
             AddSection("批量操作", ref y);

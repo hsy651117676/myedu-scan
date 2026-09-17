@@ -255,6 +255,7 @@ namespace ScanTool.Services
 
         public void StopCrop()
         {
+            if (!_isCropping) return;
             _isCropping = false;
             _picBox.Cursor = Cursors.Default;
             _picBox.MouseDown -= OnCropMouseDown;
@@ -277,7 +278,6 @@ namespace ScanTool.Services
             _picBox.Paint += OnDeskewPaint;
             _onStatusChanged?.Invoke("手动纠偏: 沿一排文字或表格线，从左到右画一条对齐线");
         }
-
         private void OnDeskewMouseDown(object sender, MouseEventArgs e)
         {
             _deskewStart = e.Location;
@@ -341,14 +341,17 @@ namespace ScanTool.Services
         private Point ScreenToImage(Point screenPt)
         {
             if (_originalImage == null) return screenPt;
-            float zoom = _zoomFactor;
-            int imgW = (int)(_originalImage.Width * zoom);
-            int imgH = (int)(_originalImage.Height * zoom);
+            int imgW = (int)(_originalImage.Width * _zoomFactor);
+            int imgH = (int)(_originalImage.Height * _zoomFactor);
             int offsetX = (_picBox.ClientSize.Width - imgW) / 2 + _panOffset.X;
             int offsetY = (_picBox.ClientSize.Height - imgH) / 2 + _panOffset.Y;
-            float imgX = (screenPt.X - offsetX) / zoom;
-            float imgY = (screenPt.Y - offsetY) / zoom;
-            return new Point((int)imgX, (int)imgY);
+            var result = new Point(
+                (int)((screenPt.X - offsetX) / _zoomFactor),
+                (int)((screenPt.Y - offsetY) / _zoomFactor));
+
+            Debug.WriteLine($"[Erase] screen=({screenPt.X},{screenPt.Y}) img=({result.X},{result.Y}) zoom={_zoomFactor:F2} pan=({_panOffset.X},{_panOffset.Y}) offset=({offsetX},{offsetY})");
+
+            return result;
         }
     }
 }

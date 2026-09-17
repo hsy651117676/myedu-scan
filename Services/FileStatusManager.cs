@@ -21,14 +21,15 @@ namespace ScanTool.Services
     public class FileStatusManager
     {
         public List<FileStatusInfo> BuildFileList(
-            string localDir,
-            int maxPages,
-            Dictionary<string, List<ScanRecord>> allScans,
-            string archid,
-            ImageCacheManager imageCache)
+     string localDir,
+     int maxPages,
+     Dictionary<string, List<ScanRecord>> allScans,
+     string archid,
+     ImageCacheManager imageCache)
         {
             var result = new List<FileStatusInfo>();
             var localFiles = new Dictionary<string, string>();
+
             if (Directory.Exists(localDir))
             {
                 foreach (var f in Directory.GetFiles(localDir, "*.JPG"))
@@ -65,13 +66,15 @@ namespace ScanTool.Services
                     var fi = new FileInfo(localPath);
                     info.LocalLength = fi.Length;
                     info.SizeDisplay = FormatHelper.FileSize(fi.Length);
+
+                    // 检查是否有 .tmp 文件
+                    info.IsDirty = imageCache?.IsDirty(localPath) ?? File.Exists(localPath + ".tmp");
                 }
                 else
                 {
                     info.SizeDisplay = "-";
+                    info.IsDirty = false;
                 }
-
-                info.IsDirty = imageCache?.IsDirty(localPath) ?? false;
 
                 if (localExists && serverExists)
                 {

@@ -60,7 +60,7 @@ namespace ScanTool.Controls
             MenuItem.Items.Add("📥 F11 下载整卷（仅下缺失和更新）", null, async (s, e) => await _owner.DownloadWholeVolume());
             MenuItem.Items.Add("📥 F12 下载整卷（强制全部重下）", null, async (s, e) => { if (_confirmForce()) await _owner.ForceDownloadWholeVolume(); });
             MenuItem.Items.Add(new ToolStripSeparator());
-            MenuItem.Items.Add("🗑 Ctrl+L 清理多余文件", null, async (s, e) => await _owner.CleanOrphanFiles());
+            MenuItem.Items.Add("🗑 Ctrl+L 清理超出页数的扫描件", null, async (s, e) => await _owner.CleanExtraPages());
         }
     }
 }

@@ -31,6 +31,8 @@ namespace ScanTool.Controls
             { Keys.F10, "force_upload_volume" },
             { Keys.F11, "download_volume" },
             { Keys.F12, "force_download_volume" },
+            { Keys.C, "download_selected" },  // 新增：单页下载
+            
             // 扫描           
             { Keys.Enter, "scan" },
             { Keys.S | Keys.Control | Keys.Shift, "replace_scan" },
@@ -118,6 +120,7 @@ namespace ScanTool.Controls
             {"batch_category", "当前类批量自动修复 (Ctrl+A)"},
             {"batch_from_current", "从当前开始自动修复 (Ctrl+R)"},
             {"batch_volume", "整卷批量自动修复 (Ctrl+Shift+A)"},
+            {"download_selected", "下载当前页 (C)"},  // 新增：下载当前页提示
         };
 
         public static string GetToolTip(string action)

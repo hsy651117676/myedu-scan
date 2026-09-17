@@ -5,6 +5,8 @@ using System.Drawing;
 using System.Linq;
 using OpenCvSharp;
 using OpenCvSharp.Extensions;
+using System.Drawing.Imaging;
+using System.Diagnostics;
 
 namespace ScanTool.Services
 {
@@ -16,7 +18,7 @@ namespace ScanTool.Services
         private Mat _original;
         private Bitmap _cachedBitmap;
 
-        private const int MaxUndoStack = 20;
+        private const int MaxUndoStack = 10;
 
         public Bitmap CurrentBitmap
         {
@@ -38,24 +40,118 @@ namespace ScanTool.Services
         {
             _current?.Dispose();
             _original?.Dispose();
-            _current = bmp.ToMat();
+
+            Mat tempMat;
+
+            Debug.WriteLine($"[LoadImage] 原始图像: {bmp.Width}x{bmp.Height}, DPI={bmp.HorizontalResolution}x{bmp.VerticalResolution}");
+
+            // 设置最大尺寸（防止内存溢出）
+            const int MAX_WIDTH = 4000;
+            const int MAX_HEIGHT = 4000;
+
+            float scale = 1.0f;
+
+            // 检查是否需要缩小
+            if (bmp.Width > MAX_WIDTH || bmp.Height > MAX_HEIGHT)
+            {
+                float scaleX = (float)MAX_WIDTH / bmp.Width;
+                float scaleY = (float)MAX_HEIGHT / bmp.Height;
+                scale = Math.Min(scaleX, scaleY);
+            }
+
+            // 检查DPI是否过高需要降采样
+            if (bmp.HorizontalResolution > 300 || bmp.VerticalResolution > 300)
+            {
+                float dpiScaleX = 300f / bmp.HorizontalResolution;
+                float dpiScaleY = 300f / bmp.VerticalResolution;
+                float dpiScale = Math.Min(dpiScaleX, dpiScaleY);
+                scale = Math.Min(scale, dpiScale);
+            }
+
+            if (scale < 0.999f)  // 需要缩小
+            {
+                int newWidth = (int)(bmp.Width * scale);
+                int newHeight = (int)(bmp.Height * scale);
+
+                Debug.WriteLine($"[LoadImage] 缩放: {bmp.Width}x{bmp.Height} -> {newWidth}x{newHeight} (scale={scale:F3})");
+
+                var resized = new Bitmap(newWidth, newHeight, PixelFormat.Format24bppRgb);
+                resized.SetResolution(300, 300);
+
+                using (var g = Graphics.FromImage(resized))
+                {
+                    g.Clear(Color.White);
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                    g.DrawImage(bmp, 0, 0, newWidth, newHeight);
+                }
+
+                tempMat = resized.ToMat();
+                resized.Dispose();
+            }
+            else
+            {
+                tempMat = bmp.ToMat();
+                Debug.WriteLine($"[LoadImage] 保持原尺寸: {bmp.Width}x{bmp.Height}");
+            }
+
+            // 统一转换为 3 通道 BGR
+            if (tempMat.Channels() == 4)
+            {
+                _current = new Mat();
+                Cv2.CvtColor(tempMat, _current, ColorConversionCodes.BGRA2BGR);
+                tempMat.Dispose();
+            }
+            else if (tempMat.Channels() == 1)
+            {
+                _current = new Mat();
+                Cv2.CvtColor(tempMat, _current, ColorConversionCodes.GRAY2BGR);
+                tempMat.Dispose();
+            }
+            else
+            {
+                _current = tempMat;
+            }
+
             _original = _current.Clone();
+
             _undoStack.ForEach(m => m.Dispose());
             _undoStack.Clear();
             _redoStack.ForEach(m => m.Dispose());
             _redoStack.Clear();
-        }
+            _cachedBitmap?.Dispose();
+            _cachedBitmap = null;
 
+            Debug.WriteLine($"[LoadImage] 处理完成: {_current.Width}x{_current.Height}, 通道数={_current.Channels()}");
+        }
         public void ReplaceImage(Bitmap bmp)
         {
-            System.Diagnostics.Debug.WriteLine($"[ReplaceImage] 前: _current={_current != null}, Count={_undoStack.Count}");
-            SaveState();
-            System.Diagnostics.Debug.WriteLine($"[ReplaceImage] SaveState后: Count={_undoStack.Count}");
+            // 直接替换，不保存 undo
             _current?.Dispose();
-            _current = bmp.ToMat();
-            System.Diagnostics.Debug.WriteLine($"[ReplaceImage] 后: Count={_undoStack.Count}");
-        }
 
+            var tempMat = bmp.ToMat();
+
+            // 统一转换为 3 通道 BGR
+            if (tempMat.Channels() == 4)
+            {
+                _current = new Mat();
+                Cv2.CvtColor(tempMat, _current, ColorConversionCodes.BGRA2BGR);
+                tempMat.Dispose();
+            }
+            else if (tempMat.Channels() == 1)
+            {
+                _current = new Mat();
+                Cv2.CvtColor(tempMat, _current, ColorConversionCodes.GRAY2BGR);
+                tempMat.Dispose();
+            }
+            else
+            {
+                _current = tempMat;
+            }
+
+            _cachedBitmap?.Dispose();
+            _cachedBitmap = null;
+        }
         public void Clear()
         {
             _current?.Dispose();
@@ -144,11 +240,22 @@ namespace ScanTool.Services
                     double avg = angles.Average();
                     var center = new Point2f(_current.Width / 2f, _current.Height / 2f);
                     using var rotMat = Cv2.GetRotationMatrix2D(center, avg, 1.0);
+
+                    double absCos = Math.Abs(rotMat.At<double>(0, 0));
+                    double absSin = Math.Abs(rotMat.At<double>(0, 1));
+                    // ✅ Cols=宽, Rows=高
+                    int newWidth = (int)Math.Ceiling(_current.Cols * absCos + _current.Rows * absSin);
+                    int newHeight = (int)Math.Ceiling(_current.Cols * absSin + _current.Rows * absCos);
+                    rotMat.At<double>(0, 2) += (newWidth / 2.0 - center.X);
+                    rotMat.At<double>(1, 2) += (newHeight / 2.0 - center.Y);
+
                     var result = new Mat();
-                    Cv2.WarpAffine(_current, result, rotMat, _current.Size(),
+                    Cv2.WarpAffine(_current, result, rotMat, new OpenCvSharp.Size(newWidth, newHeight),
                         InterpolationFlags.Cubic, BorderTypes.Constant, new Scalar(255, 255, 255));
                     _current.Dispose();
                     _current = result;
+                    _cachedBitmap?.Dispose();  // ✅ 清除缓存
+                    _cachedBitmap = null;
                 }
             }
         }
@@ -192,20 +299,50 @@ namespace ScanTool.Services
             SaveState();
             var center = new Point2f(_current.Width / 2f, _current.Height / 2f);
             using var rotMat = Cv2.GetRotationMatrix2D(center, angle, 1.0);
+
+            double absCos = Math.Abs(rotMat.At<double>(0, 0));
+            double absSin = Math.Abs(rotMat.At<double>(0, 1));
+            // ✅ Cols=宽, Rows=高
+            int newWidth = (int)Math.Ceiling(_current.Cols * absCos + _current.Rows * absSin);
+            int newHeight = (int)Math.Ceiling(_current.Cols * absSin + _current.Rows * absCos);
+            rotMat.At<double>(0, 2) += (newWidth / 2.0 - center.X);
+            rotMat.At<double>(1, 2) += (newHeight / 2.0 - center.Y);
+
             var result = new Mat();
-            Cv2.WarpAffine(_current, result, rotMat, _current.Size(),
+            Cv2.WarpAffine(_current, result, rotMat, new OpenCvSharp.Size(newWidth, newHeight),
                 InterpolationFlags.Cubic, BorderTypes.Constant, new Scalar(255, 255, 255));
             _current.Dispose();
             _current = result;
+            _cachedBitmap?.Dispose();  // ✅ 清除缓存
+            _cachedBitmap = null;
         }
         public void SetCurrentImage(Bitmap bmp)
         {
             _current?.Dispose();
-            _current = bmp.ToMat();
+
+            var tempMat = bmp.ToMat();
+
+            // 统一转换为 3 通道 BGR
+            if (tempMat.Channels() == 4)
+            {
+                _current = new Mat();
+                Cv2.CvtColor(tempMat, _current, ColorConversionCodes.BGRA2BGR);
+                tempMat.Dispose();
+            }
+            else if (tempMat.Channels() == 1)
+            {
+                _current = new Mat();
+                Cv2.CvtColor(tempMat, _current, ColorConversionCodes.GRAY2BGR);
+                tempMat.Dispose();
+            }
+            else
+            {
+                _current = tempMat;
+            }
+
             _cachedBitmap?.Dispose();
             _cachedBitmap = null;
         }
-
         public void Dispose()
         {
             _current?.Dispose();

@@ -312,142 +312,185 @@ namespace ScanTool.Controls
         private async Task RunBatchRepair(Func<bool> hasNextMaterial, RepairProfile profile)
         {
             _cancelled = false;
+            int totalPages = _listManager.Count;
+            int processedPages = 0;
 
-            while (!_cancelled)
+            Debug.WriteLine($"[BatchRepair] 开始处理: 总页数={totalPages}");
+
+            for (int pageIndex = 0; pageIndex < totalPages; pageIndex++)
             {
-                int idx = _listManager.SelectedIndex;
-                var info = _listManager.GetFile(idx);
-                int total = _listManager.Count;
+                if (_cancelled) break;
 
-                if (info != null && info.LocalPath != null && File.Exists(info.LocalPath))
+                _listManager.SelectPage(pageIndex);
+                var info = _listManager.GetFile(pageIndex);
+
+                Debug.WriteLine($"[BatchRepair] 处理第 {pageIndex + 1}/{totalPages} 页: {info?.Filename}");
+
+                if (info == null || info.LocalPath == null || !File.Exists(info.LocalPath))
                 {
-                    Bitmap originalBmp = null;
-                    Bitmap result = null;
+                    Debug.WriteLine($"[BatchRepair] 文件不存在或信息为空");
+                    _lblStatus.Text = $"跳过: {info?.Filename ?? "空"}";
+                    Application.DoEvents();
+                    continue;
+                }
 
-                    try
+                Bitmap originalBmp = null;
+                Bitmap result = null;
+
+                try
+                {
+                    // 加载图像
+                    originalBmp = new Bitmap(info.LocalPath);
+                    Debug.WriteLine($"[BatchRepair] 图像信息: {info.Filename}, 尺寸={originalBmp.Width}x{originalBmp.Height}, DPI={originalBmp.HorizontalResolution}x{originalBmp.VerticalResolution}");
+
+                    // 检查DPI，如果是非300DPI，记录但不中断
+                    if (originalBmp.HorizontalResolution != 300 || originalBmp.VerticalResolution != 300)
                     {
-                        originalBmp = new Bitmap(info.LocalPath);
+                        Debug.WriteLine($"[BatchRepair] 非300DPI图像: {originalBmp.HorizontalResolution}x{originalBmp.VerticalResolution}");
+                    }
 
-                        if (profile == null)
+                    if (profile == null)
+                    {
+                        Debug.WriteLine($"[BatchRepair] 使用自动判断修复");
+                        var autoProfile = AutoRepairService.Analyze(originalBmp);
+
+                        if (autoProfile != null && autoProfile.Name != "不自动修复")
                         {
-                            Debug.WriteLine($"[BatchRepair] 材料: {_tvMaterials.SelectedNode?.Text}, 文件: {info.Filename}");
-                            var autoProfile = AutoRepairService.Analyze(originalBmp);
-                            if (autoProfile != null && autoProfile.Name != "不自动修复")
-                                result = AutoRepairService.Execute(originalBmp, autoProfile);
-                            else
-                                result = new Bitmap(originalBmp);
-
-                            if (result != null)
-                            {
-                                _processor.LoadImage(result);
-                                _editor.SetImage(result);
-                                _viewport.SetOriginalImage(result);
-                                _viewport.FitToScreen();
-                                // 强制刷新界面
-                                Application.DoEvents();
-                            }
-
-                            var finalResult = _processor.CurrentBitmap ?? result;
-                            if (finalResult != null && (autoProfile?.NeedBackgroundRemove == true || (autoProfile?.Contrast == true && autoProfile.ContrastValue > 1.0)))
-                                _imageCache.Store(info.LocalPath, finalResult);
-
-                            _lblStatus.Text = $"【自动判断修复】{info.Filename} | {autoProfile?.Diagnosis} 阈值:{autoProfile?.MaskThreshold:F0} F:{autoProfile?.ContrastValue:F2}";
-                        }
-                        else if (profile.Name != "不自动修复")
-                        {
-                            result = AutoRepairService.ApplyPreset(originalBmp, profile, res =>
-                            {
-                                _processor.LoadImage(res);
-                                _editor.SetImage(res);
-                                _viewport.SetOriginalImage(res);
-                                _viewport.FitToScreen();
-                                // 强制刷新界面
-                                Application.DoEvents();
-                            });
-                            _imageCache.Store(info.LocalPath, result);
-                            _lblStatus.Text = $"【{profile.Name}】已处理: {info.Filename}";
+                            result = AutoRepairService.Execute(originalBmp, autoProfile);
                         }
                         else
                         {
                             result = new Bitmap(originalBmp);
-                            _imageCache.Store(info.LocalPath, result);
-                            _lblStatus.Text = $"【{profile.Name}】已处理: {info.Filename}";
                         }
 
-                        // 再次强制刷新状态栏
-                        Application.DoEvents();
+                        if (result != null)
+                        {
+                            _processor.LoadImage(result);
+                            _editor.SetImage(result);
+                            _viewport.SetOriginalImage(result);
+                            _viewport.FitToScreen();
+                            Application.DoEvents();
+                        }
+
+                        var finalResult = _processor.CurrentBitmap ?? result;
+                        if (finalResult != null && (autoProfile?.NeedBackgroundRemove == true || (autoProfile?.Contrast == true && autoProfile.ContrastValue > 1.0)))
+                        {
+                            _imageCache.Store(info.LocalPath, finalResult);
+                        }
+
+                        _lblStatus.Text = $"【自动判断修复】{info.Filename} | {autoProfile?.Diagnosis}";
                     }
-                    finally
+                    else if (profile.Name != "不自动修复")
                     {
-                        originalBmp?.Dispose();
-                        if (result != null && result != _processor.CurrentBitmap)
-                            result.Dispose();
+                        result = AutoRepairService.ApplyPreset(originalBmp, profile, res =>
+                        {
+                            _processor.LoadImage(res);
+                            _editor.SetImage(res);
+                            _viewport.SetOriginalImage(res);
+                            _viewport.FitToScreen();
+                            Application.DoEvents();
+                        });
+                        _imageCache.Store(info.LocalPath, result);
+                        _lblStatus.Text = $"【{profile.Name}】已处理: {info.Filename}";
                     }
-                }
-                else
-                {
-                    _lblStatus.Text = $"跳过: {info?.Filename ?? "空"}";
-                    Application.DoEvents();
-                }
-
-                if (idx >= total - 1)
-                {
-                    if (hasNextMaterial())
-                        _owner.OnToolAction("next_page");
                     else
-                        break;
+                    {
+                        result = new Bitmap(originalBmp);
+                        _imageCache.Store(info.LocalPath, result);
+                        _lblStatus.Text = $"【{profile.Name}】已处理: {info.Filename}";
+                    }
+
+                    processedPages++;
                 }
-                else
+                catch (Exception ex)
                 {
-                    int beforeIdx = _listManager.SelectedIndex;
-                    _owner.OnToolAction("next_page");
-                    int afterIdx = _listManager.SelectedIndex;
-                    if (afterIdx == beforeIdx && _listManager.Count == total)
-                        break;
+                    Debug.WriteLine($"[BatchRepair] 处理失败: {ex.Message}");
+                    Debug.WriteLine($"[BatchRepair] 堆栈: {ex.StackTrace}");
+                    _lblStatus.Text = $"处理失败: {info.Filename} - {ex.Message}";
+                }
+                finally
+                {
+                    originalBmp?.Dispose();
+                    if (result != null && result != _processor.CurrentBitmap)
+                        result.Dispose();
                 }
 
-                // 翻页后强制刷新
                 Application.DoEvents();
             }
 
             _loadExistingFiles();
             _updateNodeStatus();
             _lblStatus.Text = _cancelled ? "已取消" : $"【{profile?.Name ?? "自动判断修复"}】处理完成";
+            Debug.WriteLine($"[BatchRepair] 完成: 共处理 {processedPages}/{totalPages} 页");
         }
-
         private TreeNode FindNextMaterialInCategory(TreeNode current, int fl)
         {
-            if (current == null) return null;
+            Debug.WriteLine($"[FindNext] 开始: current={current?.Text}");
+
+            if (current == null)
+            {
+                Debug.WriteLine("[FindNext] current is null, 返回 null");
+                return null;
+            }
 
             TreeNode flNode = current.Parent;
-            if (flNode == null) return null;
+            Debug.WriteLine($"[FindNext] flNode={flNode?.Text}");
+
+            if (flNode == null)
+            {
+                Debug.WriteLine("[FindNext] flNode is null, 返回 null");
+                return null;
+            }
 
             var allNodes = new List<TreeNode>();
             CollectMaterialNodes(flNode, fl, allNodes);
+            Debug.WriteLine($"[FindNext] 收集到 {allNodes.Count} 个节点");
+
+            foreach (var node in allNodes)
+            {
+                var nodeTag = node.Tag as NodeTag;
+                Debug.WriteLine($"[FindNext]   {node.Text} (Fl={nodeTag?.Fl}, Archid={nodeTag?.Archid})");
+            }
 
             int idx = allNodes.IndexOf(current);
-            if (idx < 0) return null;
+            Debug.WriteLine($"[FindNext] current 在列表中的索引={idx}");
+
+            if (idx < 0)
+            {
+                Debug.WriteLine("[FindNext] idx < 0, 返回 null");
+                return null;
+            }
 
             for (int i = idx + 1; i < allNodes.Count; i++)
             {
                 var node = allNodes[i];
-                if (node.Tag is NodeTag tag && tag.Archid != null && int.Parse(tag.Fl) == fl)
+                var nodeTag = node.Tag as NodeTag;
+
+                if (nodeTag != null && nodeTag.Archid != null && int.Parse(nodeTag.Fl) == fl)
+                {
+                    Debug.WriteLine($"[FindNext] 返回下一个: {node.Text}");
                     return node;
+                }
             }
 
+            Debug.WriteLine("[FindNext] 没有找到下一个，返回 null");
             return null;
         }
-
         private void CollectMaterialNodes(TreeNode parent, int fl, List<TreeNode> result)
         {
             foreach (TreeNode child in parent.Nodes)
             {
-                if (child.Tag is NodeTag tag && tag.Archid != null && int.Parse(tag.Fl) == fl)
+                var childTag = child.Tag as NodeTag;
+
+                if (childTag != null && childTag.Archid != null && int.Parse(childTag.Fl) == fl)
+                {
+                    Debug.WriteLine($"[Collect] 添加: {child.Text}");
                     result.Add(child);
+                }
+
                 CollectMaterialNodes(child, fl, result);
             }
         }
-
         private void CollectAllMaterialNodes(TreeNode parent, int fl, List<TreeNode> result)
         {
             foreach (TreeNode child in parent.Nodes)
@@ -494,13 +537,13 @@ namespace ScanTool.Controls
         // ==================== 替换扫描 ====================
 
         public void ReplaceScan(Dictionary<string, List<ScanRecord>> allScans,
-     ScanService scanService, ImageCacheManager imageCache, ImageProcessor processor,
-     ImageEditor editor, ViewportController viewport, ScanListManager listManager,
-     string scanDir, string currentRsid, int currentFl, int currentArchid,
-     Func<string> getColorMode, Func<CropPreset> getCurrentPreset,
-     Action<string> setEditingFile, Func<string> getEditingFile,
-     Action loadExistingFiles, Action updateNodeStatus, Action<string> setLocalPath,
-     Func<RepairProfile> getRepairProfile)
+    ScanService scanService, ImageCacheManager imageCache, ImageProcessor processor,
+    ImageEditor editor, ViewportController viewport, ScanListManager listManager,
+    string scanDir, string currentRsid, int currentFl, int currentArchid,
+    Func<string> getColorMode, Func<CropPreset> getCurrentPreset,
+    Action<string> setEditingFile, Func<string> getEditingFile,
+    Action loadExistingFiles, Action updateNodeStatus, Action<string> setLocalPath,
+    Func<RepairProfile> getRepairProfile)
         {
             var info = listManager.GetFile(listManager.SelectedIndex);
             if (info == null)
@@ -515,19 +558,27 @@ namespace ScanTool.Controls
                 return;
             }
 
-            var dr = MessageBox.Show($"将替换文件：{info.Filename}\n\n重新扫描一页替换该文件。\n\n确定继续？",
-                "替换扫描确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-            if (dr != DialogResult.Yes) return;
+            bool localExists = !string.IsNullOrEmpty(info.LocalPath) && File.Exists(info.LocalPath);
+
+            string msg = localExists
+                ? $"将替换文件：{info.Filename}\n\n重新扫描一页替换该文件。\n\n确定继续？"
+                : $"本地文件 {info.Filename} 不存在。\n\n将直接扫描并保存为该文件。\n\n确定继续？";
+
+            if (MessageBox.Show(msg, "替换扫描确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                return;
 
             try
             {
-                if (!string.IsNullOrEmpty(info.LocalPath) && File.Exists(info.LocalPath))
+                if (localExists)
                 {
                     imageCache.Release(info.LocalPath);
-                    File.Delete(info.LocalPath);
+                    try { File.Delete(info.LocalPath); } catch { }
                 }
 
-                imageCache.Release(getEditingFile());
+                var editingFile = getEditingFile();
+                if (!string.IsNullOrEmpty(editingFile))
+                    imageCache.Release(editingFile);
+
                 editor.SetImage(null);
                 viewport.SetOriginalImage(null);
                 processor.Clear();
@@ -574,16 +625,13 @@ namespace ScanTool.Controls
                     Directory.CreateDirectory(outDir);
                     string path = Path.Combine(outDir, info.Filename);
 
-                    // 保存到磁盘
                     using (var saveBmp = new Bitmap(finalBmp))
                     {
                         ImageSaveHelper.SaveJpeg(saveBmp, path);
                     }
 
-
                     setEditingFile(path);
 
-                    // 直接显示内存中的修复结果
                     processor.LoadImage(finalBmp);
                     editor.SetImage(finalBmp);
                     viewport.SetOriginalImage(finalBmp);
@@ -605,7 +653,7 @@ namespace ScanTool.Controls
                     imageCache.MarkDirty(path);
                     updateNodeStatus();
                     setLocalPath(outDir);
-                    _lblStatus.Text = $"替换扫描完成: {info.Filename}";
+                    _lblStatus.Text = $"替换扫描完成: {info.Filename}（请上传到服务器覆盖）";
                 }
                 finally
                 {
@@ -618,7 +666,6 @@ namespace ScanTool.Controls
                 loadExistingFiles();
             }
         }
-
         // ==================== 修改页数 ====================
 
         public void ShowEditPageCountDialog(Dictionary<int, List<ArchiveItem>> allMaterials,
@@ -683,12 +730,13 @@ namespace ScanTool.Controls
             catch (Exception ex) { _lblStatus.Text = $"页数更新失败: {ex.Message}"; }
         }
 
-        // ==================== 清理多余文件 ====================
+        // ==================== 清理多余扫描件 ====================
 
-        public async Task CleanOrphanFiles(Dictionary<string, List<ScanRecord>> allScans,
-            int maxPages, string currentRsid, string currentArchid, Action refreshLocalTree)
+        public async Task CleanExtraPages(Dictionary<string, List<ScanRecord>> allScans,
+     int maxPages, string currentRsid, string currentArchid, Action refreshLocalTree)
         {
-            if (maxPages == 0 || allScans == null) { _lblStatus.Text = "没有多余文件"; return; }
+            if (maxPages == 0 || allScans == null) { _lblStatus.Text = "没有多余扫描件"; return; }
+
             var toDelete = new List<string>();
             if (allScans.TryGetValue(currentArchid, out var scanList))
                 foreach (var s in scanList)
@@ -696,21 +744,57 @@ namespace ScanTool.Controls
                     var m = System.Text.RegularExpressions.Regex.Match(s.Filename, @"^(\d+)");
                     if (m.Success && int.Parse(m.Groups[1].Value) > maxPages) toDelete.Add(s.Filename);
                 }
-            if (toDelete.Count == 0) { _lblStatus.Text = "没有多余文件"; return; }
-            if (MessageBox.Show($"发现 {toDelete.Count} 个多余文件，是否删除？\n\n{string.Join("\n", toDelete.Take(10))}",
-                "清理多余文件", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
 
-            _progressBar.Visible = true; _progressBar.Value = 0;
+            if (toDelete.Count == 0) { _lblStatus.Text = "没有多余扫描件"; return; }
+
+            if (MessageBox.Show($"发现 {toDelete.Count} 个多余扫描件，是否删除？\n\n{string.Join("\n", toDelete.Take(10))}",
+                "清理多余扫描件", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+
+            // 本地目录
+            string localDir = Path.Combine(_scanDir, currentRsid.PadLeft(8, '0'), _owner.CurrentFl.ToString(), currentArchid);
+
+            _progressBar.Visible = true;
+            _progressBar.Value = 0;
             int deleted = 0;
+            int localDeleted = 0;
+
             for (int i = 0; i < toDelete.Count; i++)
             {
-                try { if (await _api.DeleteScan(currentRsid, currentArchid, toDelete[i])) deleted++; } catch { }
+                try
+                {
+                    // 1. 删除服务器文件 + 记录
+                    if (await _api.DeleteScan(currentRsid, currentArchid, toDelete[i]))
+                        deleted++;
+
+                    // 2. 删除本地文件 + .tmp
+                    string localFile = Path.Combine(localDir, toDelete[i]);
+                    if (File.Exists(localFile))
+                    {
+                        try
+                        {
+                            _imageCache.Release(localFile);
+                            File.Delete(localFile);
+                            localDeleted++;
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        // 本地没有，但可能有 .tmp 或 .bak
+                        _imageCache.Release(localFile);
+                    }
+                }
+                catch { }
+
                 _progressBar.Value = Math.Min(i + 1, toDelete.Count);
                 _lblStatus.Text = $"清理: {i + 1}/{toDelete.Count}";
             }
+
             _progressBar.Visible = false;
-            _lblStatus.Text = $"已删除 {deleted} 个多余文件";
-            if (deleted > 0) refreshLocalTree();
+            _lblStatus.Text = $"已删除 服务器 {deleted} 个 / 本地 {localDeleted} 个";
+
+            if (deleted > 0 || localDeleted > 0)
+                refreshLocalTree();
         }
     }
 }

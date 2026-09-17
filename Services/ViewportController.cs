@@ -19,6 +19,7 @@ namespace ScanTool.Services
         private bool _enableDrag = true;
 
         public float ZoomFactor => _zoomFactor;
+        public Point PanOffset => _panOffset;
 
         public bool EnableDrag
         {
